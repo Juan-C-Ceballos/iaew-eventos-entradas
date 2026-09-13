@@ -1,0 +1,5 @@
+# Docker Compose — a completar en la Entrega 1 (28/09/2026) con los servicios definidos:
+# API, base de datos, broker de mensajes, y cualquier otro servicio de soporte.
+version: "3.9"
+
+services: {}
