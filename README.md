@@ -11,7 +11,6 @@ Consigna: https://utn-frc-iaew.github.io/iaew-2026-ecommerce-api/tpi/index.html
 | Integrante | Legajo |
 |---|---|
 | Juan Cruz Ceballos | 94239 |
-| Marinangeli Mateo | 97179 |
 | Santino Magris | 91999 |
 | Mateo Estrada Uriz | 95556 |
 
