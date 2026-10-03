@@ -90,15 +90,16 @@ cp .env.example .env
 
 1. **Applications → APIs → Create API:** Name `IAEW Eventos API`, Identifier `https://iaew-eventos-api` (es el `AUTH0_AUDIENCE`), Signing Algorithm `RS256`.
 2. En la API, en la pestaña **Permissions**, agregar los scopes `read:eventos`, `write:eventos`, `admin:eventos`, `buy:entradas` y `validate:entradas`.
-3. **Applications → Create Application → Machine to Machine**, una por rol, cada una autorizada para la API con estos permisos:
+3. Crear una aplicación **Machine to Machine** por rol (*Applications → Create Application*). Al crear la API, Auth0 genera sola una "IAEW Eventos API (Test Application)", que se puede renombrar y usar como la primera.
+4. En cada aplicación, ir a la pestaña **API Access**, elegir `IAEW Eventos API` y, en la pestaña **Client Access**, otorgar solo los scopes del rol. *User-Delegated Access* no se usa y debe quedar en 0.
 
-   | Aplicación M2M | Scopes |
+   | Aplicación M2M | Scopes (Client Access) |
    |---|---|
    | `iaew-organizador` | `read:eventos`, `write:eventos`, `admin:eventos` |
    | `iaew-canal-venta` | `read:eventos`, `buy:entradas` |
    | `iaew-control-acceso` | `validate:entradas` |
 
-4. Copiar el **Domain** del tenant a `AUTH0_DOMAIN`, y el Client ID y Client Secret de la aplicación que se vaya a usar a `AUTH0_CLIENT_ID` y `AUTH0_CLIENT_SECRET` en `.env`.
+5. Copiar el **Domain** de la aplicación (por ejemplo `dev-xxxx.us.auth0.com`, sin `https://`) a `AUTH0_DOMAIN`, y su Client ID y Client Secret a `AUTH0_CLIENT_ID` y `AUTH0_CLIENT_SECRET` en `.env`. Después, recrear la API para que tome los valores: `docker compose up -d api`.
 
 ## 7. Obtener un token (`client_credentials`)
 
