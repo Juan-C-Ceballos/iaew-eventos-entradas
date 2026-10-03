@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://iaew-eventos.example.test/schemas/entrada-comprada-v1.json",
+  "title": "entrada.comprada v1",
+  "description": "Publicado por la API cuando una compra queda pagada. Lo consume el worker para emitir las entradas.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["eventId", "type", "version", "occurredAt", "correlationId", "data"],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" },
+    "type": { "const": "entrada.comprada" },
+    "version": { "const": 1 },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "correlationId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["compraId"],
+      "properties": {
+        "compraId": { "type": "string", "pattern": "^[a-fA-F0-9]{24}$" }
+      }
+    }
+  }
+}

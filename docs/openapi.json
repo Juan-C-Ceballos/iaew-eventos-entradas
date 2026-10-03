@@ -1,0 +1,717 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "IAEW Eventos y Entradas API",
+    "version": "1.0.0",
+    "description": "Contrato de la API del TPI IAEW 2026 (dominio Eventos y Entradas): CRUD de eventos y compras, flujo multi-paso de compra (reserva de cupo → pago simulado notificado por webhook → emisión diferida de entradas vía RabbitMQ) y validación de ingreso.\n\nConvenciones (ver docs/adr):\n- Rutas sin prefijo de versión; la versión del contrato es `info.version` (ADR 0001).\n- Errores con el formato `Error` `{ error, code, retryable, action, details? }` (ADR 0001).\n- OAuth 2.0 `client_credentials` con Auth0; 401 = token ausente/inválido, 403 = falta el scope (ADR 0004).\n- `Idempotency-Key` obligatorio en operaciones con efectos de negocio (ADR 0007).\n- Header opcional `X-Correlation-Id` en todas las operaciones; se devuelve en la respuesta y se propaga a logs y eventos (ADR 0008, propuesta).",
+    "contact": { "name": "Equipo TPI Eventos y Entradas — UTN FRC" },
+    "license": { "name": "ISC", "identifier": "ISC" }
+  },
+  "servers": [{ "url": "http://localhost:3000", "description": "Entorno local (Docker Compose)" }],
+  "tags": [
+    { "name": "Eventos", "description": "CRUD de eventos" },
+    { "name": "Compras", "description": "Flujo multi-paso de compra de entradas" },
+    { "name": "Entradas", "description": "Consulta y validación de ingreso" },
+    { "name": "Webhooks", "description": "Notificaciones entrantes de la pasarela de pago" },
+    { "name": "Interno", "description": "Operaciones internas protegidas con x-api-key" },
+    { "name": "Operación", "description": "Salud y diagnóstico" }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": ["Operación"],
+        "summary": "Estado del servicio",
+        "operationId": "obtenerSalud",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "La API está levantada.",
+            "content": { "application/json": { "schema": { "type": "object", "required": ["status"], "properties": { "status": { "const": "ok" } } }, "example": { "status": "ok" } } }
+          }
+        }
+      }
+    },
+    "/token-info": {
+      "get": {
+        "tags": ["Operación"],
+        "summary": "Diagnóstico del access token recibido",
+        "description": "Devuelve issuer, audience, subject y scopes del token. No exige scopes: sirve para verificar la configuración de Auth0.",
+        "operationId": "obtenerInfoToken",
+        "security": [{ "oauth2": [] }],
+        "responses": {
+          "200": { "description": "Token válido.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TokenInfo" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/eventos": {
+      "get": {
+        "tags": ["Eventos"],
+        "summary": "Listar eventos",
+        "operationId": "listarEventos",
+        "security": [{ "oauth2": ["read:eventos"] }],
+        "parameters": [
+          { "name": "estado", "in": "query", "required": false, "description": "Filtra por estado.", "schema": { "$ref": "#/components/schemas/EstadoEvento" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Eventos ordenados por fecha ascendente.",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Evento" } }, "example": [{ "_id": "66f000000000000000000001", "nombre": "Recital de Rock Sinfónico", "descripcion": "Orquesta y banda en vivo.", "fecha": "2026-11-21T00:00:00.000Z", "lugar": "Estadio Ciudad — Córdoba", "capacidad": 500, "cupoDisponible": 498, "precio": 25000, "estado": "publicado", "createdAt": "2026-10-03T12:00:00.000Z", "updatedAt": "2026-10-03T12:30:00.000Z" }] } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      },
+      "post": {
+        "tags": ["Eventos"],
+        "summary": "Crear un evento",
+        "description": "El servidor inicializa `cupoDisponible = capacidad`.",
+        "operationId": "crearEvento",
+        "security": [{ "oauth2": ["write:eventos"] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EventoCrear" }, "example": { "nombre": "Recital de Rock Sinfónico", "descripcion": "Orquesta y banda en vivo.", "fecha": "2026-11-21T00:00:00.000Z", "lugar": "Estadio Ciudad — Córdoba", "capacidad": 500, "precio": 25000, "estado": "publicado" } } }
+        },
+        "responses": {
+          "201": { "description": "Evento creado.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Evento" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/eventos/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/Id" }],
+      "get": {
+        "tags": ["Eventos"],
+        "summary": "Obtener un evento",
+        "operationId": "obtenerEvento",
+        "security": [{ "oauth2": ["read:eventos"] }],
+        "responses": {
+          "200": { "description": "Evento encontrado.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Evento" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      },
+      "patch": {
+        "tags": ["Eventos"],
+        "summary": "Actualizar un evento",
+        "description": "Actualización parcial. Cambiar `capacidad` ajusta `cupoDisponible` en la misma diferencia; no puede quedar por debajo de las entradas ya reservadas o vendidas (`CAPACITY_BELOW_SOLD`). Las transiciones de estado válidas son borrador→publicado, publicado→cancelado|finalizado.",
+        "operationId": "actualizarEvento",
+        "security": [{ "oauth2": ["write:eventos"] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EventoActualizar" }, "example": { "precio": 27000, "capacidad": 600 } } }
+        },
+        "responses": {
+          "200": { "description": "Evento actualizado.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Evento" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      },
+      "delete": {
+        "tags": ["Eventos"],
+        "summary": "Eliminar un evento sin ventas",
+        "description": "Solo se elimina si no tiene compras asociadas; un evento con ventas se cancela con PATCH `estado: cancelado` (`EVENT_HAS_SALES`).",
+        "operationId": "eliminarEvento",
+        "security": [{ "oauth2": ["admin:eventos"] }],
+        "responses": {
+          "204": { "description": "Evento eliminado." },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      }
+    },
+    "/compras": {
+      "post": {
+        "tags": ["Compras"],
+        "summary": "Paso 1 — Reservar entradas (crear compra)",
+        "description": "Valida que el evento esté publicado y reserva cupo de forma atómica (`findOneAndUpdate` condicional sobre `cupoDisponible`). Crea la compra en estado `pendiente` con vencimiento `reservaExpiraEn`. El total lo calcula el servidor. Repetir con la misma `Idempotency-Key` y el mismo cuerpo devuelve la compra original sin reservar de nuevo.",
+        "operationId": "crearCompra",
+        "security": [{ "oauth2": ["buy:entradas"] }],
+        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CompraCrear" },
+              "example": { "eventoId": "66f000000000000000000001", "cantidad": 2, "asistente": { "nombre": "Ana Pérez", "email": "ana.perez@example.com", "documento": "40123456" } }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Compra creada (o repetición de una creación anterior con la misma clave).",
+            "headers": { "Idempotency-Replayed": { "$ref": "#/components/headers/IdempotencyReplayed" } },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CompraResponse" },
+                "example": {
+                  "compra": { "_id": "6702a1b2c3d4e5f601234567", "eventoId": "66f000000000000000000001", "asistenteId": "6702a1b2c3d4e5f601234500", "cantidad": 2, "precioUnitario": 25000, "total": 50000, "estado": "pendiente", "reservaExpiraEn": "2026-10-03T15:15:00.000Z", "createdAt": "2026-10-03T15:00:00.000Z", "updatedAt": "2026-10-03T15:00:00.000Z" },
+                  "idempotencia": { "key": "compra:ana-40123456:recital:0001", "replayed": false }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Cuerpo inválido o `Idempotency-Key` ausente/inválida.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" },
+                "examples": {
+                  "claveAusente": { "summary": "Falta Idempotency-Key", "value": { "error": "Idempotency-Key requerida", "code": "IDEMPOTENCY_KEY_REQUIRED", "retryable": false, "action": "Enviar una Idempotency-Key estable por intención de compra" } },
+                  "cantidadInvalida": { "summary": "Cantidad fuera de rango", "value": { "error": "Datos de compra inválidos", "code": "VALIDATION_ERROR", "retryable": false, "action": "Corregir los campos indicados", "details": { "cantidad": "Debe ser un entero entre 1 y 10" } } }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": {
+            "description": "Conflicto de negocio o de idempotencia.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" },
+                "examples": {
+                  "eventoAgotado": { "summary": "Evento agotado", "value": { "error": "No hay cupo suficiente para la cantidad solicitada", "code": "EVENT_SOLD_OUT", "retryable": false, "action": "Reducir la cantidad o elegir otro evento", "details": { "eventoId": "66f000000000000000000002", "cupoDisponible": 0, "solicitado": 1 } } },
+                  "eventoNoPublicado": { "summary": "Evento no publicado", "value": { "error": "El evento no admite compras", "code": "EVENT_NOT_PUBLISHED", "retryable": false, "action": "Comprar solo eventos en estado publicado", "details": { "estado": "borrador" } } },
+                  "claveReutilizada": { "summary": "Compra duplicada con datos distintos", "value": { "error": "La Idempotency-Key ya se usó con otro cuerpo", "code": "IDEMPOTENCY_KEY_MISMATCH", "retryable": false, "action": "Generar una nueva clave para una intención distinta" } }
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": ["Compras"],
+        "summary": "Listar compras",
+        "operationId": "listarCompras",
+        "security": [{ "oauth2": ["buy:entradas"] }],
+        "parameters": [
+          { "name": "eventoId", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/ObjectId" } },
+          { "name": "estado", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/EstadoCompra" } }
+        ],
+        "responses": {
+          "200": { "description": "Compras ordenadas por `createdAt` descendente.", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Compra" } } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/compras/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/Id" }],
+      "get": {
+        "tags": ["Compras"],
+        "summary": "Obtener una compra",
+        "description": "Permite seguir el flujo: `pendiente` → `pago_pendiente` → `pagada` (y `emisionEstado` `pendiente` → `emitida`) o `rechazada`.",
+        "operationId": "obtenerCompra",
+        "security": [{ "oauth2": ["buy:entradas"] }],
+        "responses": {
+          "200": { "description": "Compra encontrada.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Compra" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/compras/{id}/pagar": {
+      "parameters": [{ "$ref": "#/components/parameters/Id" }],
+      "post": {
+        "tags": ["Compras"],
+        "summary": "Paso 2 — Solicitar el pago a la pasarela simulada",
+        "description": "Solo desde `pendiente` y antes de `reservaExpiraEn`. Envía el cobro a la pasarela y deja la compra en `pago_pendiente`. Responde 202 porque el resultado llega después por `POST /webhooks/pagos` (paso 3). Si la reserva venció, la compra pasa a `expirada`, se libera el cupo y responde 409 `RESERVATION_EXPIRED`.",
+        "operationId": "pagarCompra",
+        "security": [{ "oauth2": ["buy:entradas"] }],
+        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+        "requestBody": {
+          "required": false,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PagoSolicitar" }, "example": { "escenario": "aprobado" } } }
+        },
+        "responses": {
+          "202": {
+            "description": "Pago solicitado; resultado pendiente de notificación.",
+            "headers": { "Idempotency-Replayed": { "$ref": "#/components/headers/IdempotencyReplayed" } },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CompraResponse" },
+                "example": {
+                  "compra": { "_id": "6702a1b2c3d4e5f601234567", "eventoId": "66f000000000000000000001", "asistenteId": "6702a1b2c3d4e5f601234500", "cantidad": 2, "precioUnitario": 25000, "total": 50000, "estado": "pago_pendiente", "reservaExpiraEn": "2026-10-03T15:15:00.000Z", "pago": { "estado": "pendiente", "referenciaExterna": "PAY-7f3c2a91", "solicitadoEn": "2026-10-03T15:02:00.000Z" }, "createdAt": "2026-10-03T15:00:00.000Z", "updatedAt": "2026-10-03T15:02:00.000Z" },
+                  "idempotencia": { "key": "pago:6702a1b2c3d4e5f601234567:v1", "replayed": false }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": {
+            "description": "Estado incompatible, reserva vencida o clave reutilizada.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" },
+                "examples": {
+                  "reservaVencida": { "summary": "Reserva vencida", "value": { "error": "La reserva venció y el cupo fue liberado", "code": "RESERVATION_EXPIRED", "retryable": false, "action": "Crear una nueva compra" } },
+                  "estadoInvalido": { "summary": "Compra no pagable", "value": { "error": "La compra no está en estado pendiente", "code": "PURCHASE_INVALID_STATE", "retryable": false, "action": "Consultar el estado con GET /compras/{id}", "details": { "estado": "rechazada" } } }
+                }
+              }
+            }
+          },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/compras/{id}/cancelar": {
+      "parameters": [{ "$ref": "#/components/parameters/Id" }],
+      "post": {
+        "tags": ["Compras"],
+        "summary": "Cancelar una compra pendiente",
+        "description": "Solo desde `pendiente`. Libera el cupo reservado. Cancelar dos veces devuelve la compra ya cancelada (operación idempotente por estado).",
+        "operationId": "cancelarCompra",
+        "security": [{ "oauth2": ["buy:entradas"] }],
+        "responses": {
+          "200": { "description": "Compra cancelada.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Compra" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      }
+    },
+    "/compras/{id}/entradas": {
+      "parameters": [{ "$ref": "#/components/parameters/Id" }],
+      "get": {
+        "tags": ["Compras"],
+        "summary": "Paso 4 — Consultar las entradas emitidas de una compra",
+        "description": "Vacío hasta que el worker procese `entrada.comprada`; ese es el efecto visible del flujo asincrónico.",
+        "operationId": "listarEntradasDeCompra",
+        "security": [{ "oauth2": ["buy:entradas"] }],
+        "responses": {
+          "200": {
+            "description": "Entradas de la compra.",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Entrada" } }, "example": [{ "_id": "6702a1b2c3d4e5f601234601", "codigo": "ENT-7K2M9Q4XA1B3", "compraId": "6702a1b2c3d4e5f601234567", "eventoId": "66f000000000000000000001", "asistenteId": "6702a1b2c3d4e5f601234500", "numero": 1, "estado": "emitida", "emitidaEn": "2026-10-03T15:02:05.000Z" }] } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/entradas/{codigo}": {
+      "parameters": [{ "$ref": "#/components/parameters/CodigoEntrada" }],
+      "get": {
+        "tags": ["Entradas"],
+        "summary": "Consultar una entrada sin consumirla",
+        "operationId": "obtenerEntrada",
+        "security": [{ "oauth2": ["validate:entradas"] }],
+        "responses": {
+          "200": { "description": "Entrada encontrada.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Entrada" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/entradas/{codigo}/validar": {
+      "parameters": [{ "$ref": "#/components/parameters/CodigoEntrada" }],
+      "post": {
+        "tags": ["Entradas"],
+        "summary": "Validar el ingreso con una entrada",
+        "description": "Transición atómica `emitida` → `usada`. Una segunda validación responde 409 `TICKET_ALREADY_USED`.",
+        "operationId": "validarEntrada",
+        "security": [{ "oauth2": ["validate:entradas"] }],
+        "responses": {
+          "200": {
+            "description": "Acceso permitido.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ValidacionResponse" }, "example": { "resultado": "acceso_permitido", "entrada": { "_id": "6702a1b2c3d4e5f601234601", "codigo": "ENT-7K2M9Q4XA1B3", "compraId": "6702a1b2c3d4e5f601234567", "eventoId": "66f000000000000000000001", "asistenteId": "6702a1b2c3d4e5f601234500", "numero": 1, "estado": "usada", "emitidaEn": "2026-10-03T15:02:05.000Z", "usadaEn": "2026-11-20T23:41:10.000Z" } } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": {
+            "description": "Entrada no válida para ingresar.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" },
+                "examples": {
+                  "yaUsada": { "summary": "Entrada ya usada", "value": { "error": "La entrada ya fue utilizada", "code": "TICKET_ALREADY_USED", "retryable": false, "action": "Denegar el acceso", "details": { "usadaEn": "2026-11-20T23:41:10.000Z" } } },
+                  "anulada": { "summary": "Entrada anulada", "value": { "error": "La entrada fue anulada", "code": "TICKET_VOIDED", "retryable": false, "action": "Denegar el acceso" } }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/webhooks/pagos": {
+      "post": {
+        "tags": ["Webhooks"],
+        "summary": "Paso 3 — Recibir el resultado del pago (webhook firmado)",
+        "description": "Invocado por la pasarela, no por clientes OAuth. Autenticación por firma: `X-Pago-Firma: sha256=<hex>` con HMAC-SHA256(`WEBHOOK_SECRET`, `<X-Pago-Timestamp>.<cuerpo crudo>`), comparada en tiempo constante; se rechaza un timestamp fuera de ±`WEBHOOK_TOLERANCIA_SEGUNDOS` (anti-replay). `pago.aprobado`: la compra pasa a `pagada` y, en la misma escritura, queda registrado el evento `entrada.comprada`, que publica el relay del outbox (ADR 0009). `pago.rechazado`: pasa a `rechazada` y se libera el cupo. Una notificación repetida devuelve 200 con `duplicado: true`, sin efectos. Un 503 (base de datos no disponible) indica a la pasarela que reintente.",
+        "operationId": "recibirNotificacionPago",
+        "security": [{ "webhookFirma": [] }],
+        "parameters": [
+          { "name": "X-Pago-Timestamp", "in": "header", "required": true, "description": "Segundos Unix en que la pasarela firmó la notificación.", "schema": { "type": "string", "pattern": "^[0-9]{10}$" }, "example": "1791990125" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/NotificacionPago" },
+              "examples": {
+                "aprobado": { "summary": "Pago aprobado", "value": { "notificacionId": "0b8f5a8e-1d2c-4c39-9a51-3f1b7f0c2d11", "type": "pago.aprobado", "occurredAt": "2026-10-03T15:02:04.000Z", "data": { "compraId": "6702a1b2c3d4e5f601234567", "referenciaExterna": "PAY-7f3c2a91", "monto": 50000 } } },
+                "rechazado": { "summary": "Pago rechazado", "value": { "notificacionId": "5c1e2f3a-4b5c-4d6e-8f90-a1b2c3d4e5f6", "type": "pago.rechazado", "occurredAt": "2026-10-03T15:02:04.000Z", "data": { "compraId": "6702a1b2c3d4e5f601234567", "referenciaExterna": "PAY-7f3c2a91", "monto": 50000, "motivo": "fondos_insuficientes" } } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Notificación procesada o reconocida como duplicada.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WebhookAck" }, "example": { "recibido": true, "duplicado": false, "compraId": "6702a1b2c3d4e5f601234567", "estadoCompra": "pagada" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": {
+            "description": "Firma ausente, inválida o timestamp fuera de tolerancia.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "Firma del webhook inválida", "code": "WEBHOOK_SIGNATURE_INVALID", "retryable": false, "action": "Firmar con el secreto compartido vigente" } } }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "503": {
+            "description": "No se pudo persistir el resultado del pago; la pasarela debe reintentar la misma notificación.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "Base de datos no disponible", "code": "DATABASE_UNAVAILABLE", "retryable": true, "action": "Reintentar la misma notificación" } } }
+          }
+        }
+      }
+    },
+    "/internal/reportes/ventas": {
+      "get": {
+        "tags": ["Interno"],
+        "summary": "Reporte de ventas por evento (x-api-key)",
+        "description": "Endpoint de comparación protegido con `x-api-key`; no reemplaza a OAuth 2.0 (ADR 0004).",
+        "operationId": "obtenerReporteVentas",
+        "security": [{ "apiKey": [] }],
+        "responses": {
+          "200": { "description": "Reporte generado.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReporteVentas" }, "example": { "generadoEn": "2026-10-03T16:00:00.000Z", "eventos": [{ "eventoId": "66f000000000000000000001", "nombre": "Recital de Rock Sinfónico", "capacidad": 500, "cupoDisponible": 498, "entradasVendidas": 2, "recaudado": 50000 }] } } } },
+          "401": {
+            "description": "API key ausente o inválida.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "API key inválida o ausente", "code": "API_KEY_INVALID", "retryable": false, "action": "Enviar una x-api-key válida" } } }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "oauth2": {
+        "type": "oauth2",
+        "description": "Auth0, flujo client_credentials (Machine to Machine). Enviar `Authorization: Bearer <access_token>`.",
+        "flows": {
+          "clientCredentials": {
+            "tokenUrl": "https://TU_AUTH0_DOMAIN/oauth/token",
+            "scopes": {
+              "read:eventos": "Consultar eventos",
+              "write:eventos": "Crear y modificar eventos",
+              "admin:eventos": "Eliminar eventos",
+              "buy:entradas": "Comprar entradas y consultar compras",
+              "validate:entradas": "Consultar y validar entradas en el control de acceso"
+            }
+          }
+        },
+        "x-audience": "https://iaew-eventos-api"
+      },
+      "apiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key",
+        "description": "Clave interna (`INTERNAL_API_KEY`). Solo para comparación; no reemplaza OAuth 2.0."
+      },
+      "webhookFirma": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Pago-Firma",
+        "description": "`sha256=<hex>` = HMAC-SHA256(WEBHOOK_SECRET, `<X-Pago-Timestamp>.<cuerpo crudo>`). Secreto compartido con la pasarela."
+      }
+    },
+    "parameters": {
+      "Id": { "name": "id", "in": "path", "required": true, "description": "Identificador MongoDB.", "schema": { "$ref": "#/components/schemas/ObjectId" }, "example": "66f000000000000000000001" },
+      "CodigoEntrada": { "name": "codigo", "in": "path", "required": true, "description": "Código de la entrada (contenido del QR).", "schema": { "type": "string", "pattern": "^ENT-[A-Z0-9]{12}$" }, "example": "ENT-7K2M9Q4XA1B3" },
+      "IdempotencyKey": { "name": "Idempotency-Key", "in": "header", "required": true, "description": "Identifica de forma estable una intención. Reusar la clave con el mismo cuerpo devuelve el resultado original; con otro cuerpo responde 409.", "schema": { "type": "string", "minLength": 8, "maxLength": 128, "pattern": "^[A-Za-z0-9._:-]+$" }, "example": "compra:ana-40123456:recital:0001" }
+    },
+    "headers": {
+      "IdempotencyReplayed": { "description": "Indica si se devolvió el resultado persistido de una solicitud anterior.", "schema": { "type": "string", "enum": ["true", "false"] } }
+    },
+    "schemas": {
+      "ObjectId": { "type": "string", "pattern": "^[a-fA-F0-9]{24}$", "examples": ["66f000000000000000000001"] },
+      "Timestamps": {
+        "type": "object",
+        "properties": { "createdAt": { "type": "string", "format": "date-time", "readOnly": true }, "updatedAt": { "type": "string", "format": "date-time", "readOnly": true } }
+      },
+      "EstadoEvento": { "type": "string", "enum": ["borrador", "publicado", "cancelado", "finalizado"] },
+      "EstadoCompra": { "type": "string", "enum": ["pendiente", "pago_pendiente", "pagada", "rechazada", "cancelada", "expirada"] },
+      "EstadoEntrada": { "type": "string", "enum": ["emitida", "usada", "anulada"] },
+      "Evento": {
+        "allOf": [
+          {
+            "type": "object",
+            "required": ["_id", "nombre", "fecha", "lugar", "capacidad", "cupoDisponible", "precio", "estado"],
+            "properties": {
+              "_id": { "$ref": "#/components/schemas/ObjectId" },
+              "nombre": { "type": "string", "maxLength": 120 },
+              "descripcion": { "type": "string", "maxLength": 2000 },
+              "fecha": { "type": "string", "format": "date-time" },
+              "lugar": { "type": "string", "maxLength": 200 },
+              "capacidad": { "type": "integer", "minimum": 1 },
+              "cupoDisponible": { "type": "integer", "minimum": 0, "readOnly": true },
+              "precio": { "type": "number", "minimum": 0 },
+              "estado": { "$ref": "#/components/schemas/EstadoEvento" }
+            }
+          },
+          { "$ref": "#/components/schemas/Timestamps" }
+        ]
+      },
+      "EventoCrear": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["nombre", "fecha", "lugar", "capacidad", "precio"],
+        "properties": {
+          "nombre": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "descripcion": { "type": "string", "maxLength": 2000 },
+          "fecha": { "type": "string", "format": "date-time" },
+          "lugar": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "capacidad": { "type": "integer", "minimum": 1 },
+          "precio": { "type": "number", "minimum": 0 },
+          "estado": { "type": "string", "enum": ["borrador", "publicado"], "default": "borrador" }
+        }
+      },
+      "EventoActualizar": {
+        "type": "object",
+        "additionalProperties": false,
+        "minProperties": 1,
+        "properties": {
+          "nombre": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "descripcion": { "type": "string", "maxLength": 2000 },
+          "fecha": { "type": "string", "format": "date-time" },
+          "lugar": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "capacidad": { "type": "integer", "minimum": 1 },
+          "precio": { "type": "number", "minimum": 0 },
+          "estado": { "$ref": "#/components/schemas/EstadoEvento" }
+        }
+      },
+      "AsistenteDatos": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["nombre", "email", "documento"],
+        "properties": {
+          "nombre": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "email": { "type": "string", "format": "email", "maxLength": 254 },
+          "documento": { "type": "string", "pattern": "^[0-9]{7,8}$", "description": "DNI sin puntos. Identifica al asistente: si ya existe, se reutiliza." }
+        }
+      },
+      "CompraCrear": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["eventoId", "cantidad", "asistente"],
+        "properties": {
+          "eventoId": { "$ref": "#/components/schemas/ObjectId" },
+          "cantidad": { "type": "integer", "minimum": 1, "maximum": 10 },
+          "asistente": { "$ref": "#/components/schemas/AsistenteDatos" }
+        }
+      },
+      "Pago": {
+        "type": "object",
+        "required": ["estado"],
+        "properties": {
+          "estado": { "type": "string", "enum": ["pendiente", "aprobado", "rechazado"] },
+          "referenciaExterna": { "type": "string" },
+          "motivoRechazo": { "type": "string" },
+          "solicitadoEn": { "type": "string", "format": "date-time" },
+          "procesadoEn": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Compra": {
+        "allOf": [
+          {
+            "type": "object",
+            "required": ["_id", "eventoId", "asistenteId", "cantidad", "precioUnitario", "total", "estado", "reservaExpiraEn"],
+            "properties": {
+              "_id": { "$ref": "#/components/schemas/ObjectId" },
+              "eventoId": { "$ref": "#/components/schemas/ObjectId" },
+              "asistenteId": { "$ref": "#/components/schemas/ObjectId" },
+              "cantidad": { "type": "integer", "minimum": 1, "maximum": 10 },
+              "precioUnitario": { "type": "number", "minimum": 0, "description": "Copia del precio del evento al reservar." },
+              "total": { "type": "number", "minimum": 0, "description": "Calculado por el servidor." },
+              "estado": { "$ref": "#/components/schemas/EstadoCompra" },
+              "reservaExpiraEn": { "type": "string", "format": "date-time" },
+              "pago": { "$ref": "#/components/schemas/Pago" },
+              "emisionEstado": { "type": "string", "enum": ["pendiente", "emitida"], "description": "Estado del efecto asincrónico (emisión de entradas)." },
+              "emitidaEn": { "type": "string", "format": "date-time" }
+            }
+          },
+          { "$ref": "#/components/schemas/Timestamps" }
+        ]
+      },
+      "Idempotencia": {
+        "type": "object",
+        "required": ["key", "replayed"],
+        "properties": { "key": { "type": "string" }, "replayed": { "type": "boolean" } }
+      },
+      "CompraResponse": {
+        "type": "object",
+        "required": ["compra", "idempotencia"],
+        "properties": { "compra": { "$ref": "#/components/schemas/Compra" }, "idempotencia": { "$ref": "#/components/schemas/Idempotencia" } }
+      },
+      "PagoSolicitar": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "escenario": { "type": "string", "enum": ["aprobado", "rechazado"], "default": "aprobado", "description": "Solo para la pasarela simulada: fuerza el resultado en la demo. No se envían datos de tarjeta." }
+        }
+      },
+      "Entrada": {
+        "type": "object",
+        "required": ["_id", "codigo", "compraId", "eventoId", "asistenteId", "numero", "estado", "emitidaEn"],
+        "properties": {
+          "_id": { "$ref": "#/components/schemas/ObjectId" },
+          "codigo": { "type": "string", "pattern": "^ENT-[A-Z0-9]{12}$" },
+          "compraId": { "$ref": "#/components/schemas/ObjectId" },
+          "eventoId": { "$ref": "#/components/schemas/ObjectId" },
+          "asistenteId": { "$ref": "#/components/schemas/ObjectId" },
+          "numero": { "type": "integer", "minimum": 1, "description": "Posición de la entrada dentro de la compra (1..cantidad)." },
+          "estado": { "$ref": "#/components/schemas/EstadoEntrada" },
+          "emitidaEn": { "type": "string", "format": "date-time" },
+          "usadaEn": { "type": "string", "format": "date-time" }
+        }
+      },
+      "ValidacionResponse": {
+        "type": "object",
+        "required": ["resultado", "entrada"],
+        "properties": { "resultado": { "const": "acceso_permitido" }, "entrada": { "$ref": "#/components/schemas/Entrada" } }
+      },
+      "NotificacionPago": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["notificacionId", "type", "occurredAt", "data"],
+        "properties": {
+          "notificacionId": { "type": "string", "format": "uuid" },
+          "type": { "type": "string", "enum": ["pago.aprobado", "pago.rechazado"] },
+          "occurredAt": { "type": "string", "format": "date-time" },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["compraId", "referenciaExterna", "monto"],
+            "properties": {
+              "compraId": { "$ref": "#/components/schemas/ObjectId" },
+              "referenciaExterna": { "type": "string", "minLength": 1 },
+              "monto": { "type": "number", "minimum": 0 },
+              "motivo": { "type": "string", "description": "Solo en pago.rechazado." }
+            }
+          }
+        }
+      },
+      "WebhookAck": {
+        "type": "object",
+        "required": ["recibido", "duplicado", "compraId", "estadoCompra"],
+        "properties": {
+          "recibido": { "const": true },
+          "duplicado": { "type": "boolean" },
+          "compraId": { "$ref": "#/components/schemas/ObjectId" },
+          "estadoCompra": { "$ref": "#/components/schemas/EstadoCompra" }
+        }
+      },
+      "EventoEntradaComprada": {
+        "description": "Mensaje publicado en RabbitMQ (exchange `entradas.exchange`, routing key `entrada.comprada`). Fuente de verdad: docs/eventos/entrada-comprada.schema.json.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["eventId", "type", "version", "occurredAt", "correlationId", "data"],
+        "properties": {
+          "eventId": { "type": "string", "format": "uuid" },
+          "type": { "const": "entrada.comprada" },
+          "version": { "const": 1 },
+          "occurredAt": { "type": "string", "format": "date-time" },
+          "correlationId": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "data": { "type": "object", "additionalProperties": false, "required": ["compraId"], "properties": { "compraId": { "$ref": "#/components/schemas/ObjectId" } } }
+        }
+      },
+      "ReporteVentas": {
+        "type": "object",
+        "required": ["generadoEn", "eventos"],
+        "properties": {
+          "generadoEn": { "type": "string", "format": "date-time" },
+          "eventos": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["eventoId", "nombre", "capacidad", "cupoDisponible", "entradasVendidas", "recaudado"],
+              "properties": {
+                "eventoId": { "$ref": "#/components/schemas/ObjectId" },
+                "nombre": { "type": "string" },
+                "capacidad": { "type": "integer" },
+                "cupoDisponible": { "type": "integer" },
+                "entradasVendidas": { "type": "integer", "description": "Suma de `cantidad` de compras pagadas." },
+                "recaudado": { "type": "number" }
+              }
+            }
+          }
+        }
+      },
+      "TokenInfo": {
+        "type": "object",
+        "properties": {
+          "issuer": { "type": "string" },
+          "audience": { "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] },
+          "subject": { "type": "string" },
+          "scopes": { "type": "string", "description": "Scopes separados por espacio." }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": ["error", "code", "retryable", "action"],
+        "properties": {
+          "error": { "type": "string", "description": "Mensaje legible." },
+          "code": { "type": "string", "description": "Código estable en UPPER_SNAKE_CASE (catálogo en ADR 0001)." },
+          "retryable": { "type": "boolean", "description": "Si repetir la misma solicitud puede tener éxito." },
+          "action": { "type": "string", "description": "Qué debe hacer el cliente." },
+          "details": { "type": "object", "additionalProperties": true }
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Solicitud inválida: JSON mal formado, id inválido, validación de campos o Idempotency-Key ausente/inválida.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "Identificador inválido", "code": "INVALID_ID", "retryable": false, "action": "Enviar un ObjectId de 24 caracteres hexadecimales" } } }
+      },
+      "Unauthorized": {
+        "description": "Token ausente, inválido o expirado.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "Token ausente, inválido o expirado", "code": "TOKEN_INVALID", "retryable": false, "action": "Obtener y enviar un access token válido" } } }
+      },
+      "Forbidden": {
+        "description": "El token es válido pero no incluye el scope requerido.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "Permisos insuficientes", "code": "SCOPE_REQUIRED", "retryable": false, "action": "Solicitar el scope requerido" } } }
+      },
+      "NotFound": {
+        "description": "Recurso inexistente.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "Evento inexistente", "code": "EVENT_NOT_FOUND", "retryable": false, "action": "Verificar el identificador" } } }
+      },
+      "Conflict": {
+        "description": "Conflicto de estado o de reglas de negocio.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "La compra no está en estado pendiente", "code": "PURCHASE_INVALID_STATE", "retryable": false, "action": "Consultar el estado actual del recurso" } } }
+      },
+      "Unavailable": {
+        "description": "La pasarela de pago no está disponible. La compra sigue en `pendiente` y la operación puede reintentarse con la misma Idempotency-Key.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "La pasarela de pago no responde", "code": "PAYMENT_PROVIDER_UNAVAILABLE", "retryable": true, "action": "Reintentar la misma solicitud" } } }
+      }
+    }
+  }
+}
