@@ -1,5 +1,101 @@
-# Docker Compose — a completar en la Entrega 1 (28/09/2026) con los servicios definidos:
-# API, base de datos, broker de mensajes, y cualquier otro servicio de soporte.
-version: "3.9"
+name: iaew-eventos-entradas
 
-services: {}
+# Los nombres de servicio coinciden con la vista C4 Container (docs/c4-container.md).
+# Las variables se leen del .env del proyecto (si existe) con valores por defecto
+# locales; dentro de la red de Compose los hosts son los nombres de servicio.
+
+services:
+  mongodb:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  rabbitmq:
+    image: rabbitmq:4.2-management
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBIT_USER:-iaew}
+      RABBITMQ_DEFAULT_PASS: ${RABBIT_PASS:-iaew-local}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  db-init:
+    build: .
+    command: ["sh", "-c", "npm run migrate && npm run seed"]
+    environment:
+      MONGODB_URI: mongodb://mongodb:27017/iaew_eventos
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: .
+    command: ["node", "src/app.js"]
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      PORT: 3000
+      MONGODB_URI: mongodb://mongodb:27017/iaew_eventos
+      AUTH0_DOMAIN: ${AUTH0_DOMAIN:-tu-tenant.us.auth0.com}
+      AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-https://iaew-eventos-api}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-colocar-api-key-local}
+      RABBIT_URL: amqp://${RABBIT_USER:-iaew}:${RABBIT_PASS:-iaew-local}@rabbitmq:5672
+      OUTBOX_INTERVALO_MS: ${OUTBOX_INTERVALO_MS:-1000}
+      PAGOS_URL: http://pagos-mock:4000
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-colocar-secreto-compartido-local}
+      WEBHOOK_TOLERANCIA_SEGUNDOS: ${WEBHOOK_TOLERANCIA_SEGUNDOS:-300}
+      RESERVA_TTL_MINUTOS: ${RESERVA_TTL_MINUTOS:-15}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  worker:
+    build: .
+    command: ["node", "src/worker.js"]
+    restart: unless-stopped
+    environment:
+      MONGODB_URI: mongodb://mongodb:27017/iaew_eventos
+      RABBIT_URL: amqp://${RABBIT_USER:-iaew}:${RABBIT_PASS:-iaew-local}@rabbitmq:5672
+      RETRY_DELAY_MS: ${RETRY_DELAY_MS:-3000}
+      MAX_RETRIES: ${MAX_RETRIES:-3}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  pagos-mock:
+    build: ./services/pagos-mock
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      PORT: 4000
+      WEBHOOK_URL: http://api:3000/webhooks/pagos
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-colocar-secreto-compartido-local}
+
+volumes:
+  mongo-data:

@@ -1,0 +1,13 @@
+node_modules
+npm-debug.log*
+.env
+.env.*
+!.env.example
+.git
+.sf
+.sfdx
+.vscode
+.idea
+postman
+test
+services

@@ -1,0 +1,13 @@
+{
+  "name": "iaew-pagos-mock",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pasarela de pago simulada que notifica el resultado por webhook firmado (HMAC).",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
