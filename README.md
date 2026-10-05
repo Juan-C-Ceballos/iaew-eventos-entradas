@@ -317,7 +317,7 @@ Stack: **Node.js 22 + Express 4 (CommonJS), MongoDB 7 + Mongoose 8, RabbitMQ 4.2
 
 | Entrega | Tag | Commit |
 |---|---|---|
-| Entrega 1 — Diseño y esqueleto | `v1.0.0` | _se completa al crear el tag_ |
+| Entrega 1 — Diseño y esqueleto | `v1.0.0` | `9836280` |
 | Entrega 2 — Implementación y defensa | `v2.0.0` | — |
 
 El hash documentado corresponde al último commit de contenido de la entrega. El `.zip` subido a UV se genera desde el tag: `git archive --format=zip -o iaew-eventos-entradas-v1.0.0.zip v1.0.0`.
