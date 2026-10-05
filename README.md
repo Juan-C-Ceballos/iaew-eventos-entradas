@@ -249,8 +249,8 @@ Diseño: [ADR 0006](docs/adr/adr-0006-webhook-pago-hmac.md).
 | `POST /compras/{id}/pagar` | `buy:entradas` + `Idempotency-Key` | Paso 2: solicitar el pago (202) |
 | `POST /webhooks/pagos` | firma HMAC | Paso 3: resultado del pago |
 | `GET /compras/{id}/entradas` | `buy:entradas` | Paso 4: entradas emitidas |
-| `GET /compras`, `GET /compras/{id}`, `POST /compras/{id}/cancelar` | `buy:entradas` | Consultar y cancelar compras |
-| `GET /entradas/{codigo}`, `POST /entradas/{codigo}/validar` | `validate:entradas` | Control de acceso |
+| `GET /compras`, `GET /compras/{id}`, `POST /compras/{id}/cancelar` | `buy:entradas` | Consultar y cancelar **las compras propias** (`creadaPor` = `sub` del token; una compra ajena responde 404) |
+| `GET /entradas/{codigo}`, `POST /entradas/{codigo}/validar` | `validate:entradas` | Control de acceso. `validar` recibe `{ "eventoId": "…" }` (el evento de la puerta) |
 | `GET /internal/reportes/ventas` | `x-api-key` | Reporte de ventas |
 
 Ejemplo **(Entrega 2)** del paso 1, con sus ejemplos completos de respuesta en el contrato:
@@ -281,6 +281,7 @@ Stack: **Node.js 22 + Express 4 (CommonJS), MongoDB 7 + Mongoose 8, RabbitMQ 4.2
 | [0009](docs/adr/adr-0009-outbox-entrada-comprada.md) | Patrón outbox para publicar `entrada.comprada` |
 | [0010](docs/adr/adr-0010-ciclo-de-vida-compra-pago-conciliacion.md) | Orden de `/pagar`, timeout de pago con conciliación y reconciliación de cupo |
 | [0011](docs/adr/adr-0011-ciclo-de-vida-evento.md) | Estados del evento, fechas, cierre automático y cancelación con cascada |
+| [0012](docs/adr/adr-0012-titularidad-trazabilidad-validacion.md) | `creadaPor`, idempotencia por cliente, asistente como snapshot y validación por evento |
 
 ## 18. Limitaciones conocidas y mejoras futuras
 
@@ -292,7 +293,8 @@ Stack: **Node.js 22 + Express 4 (CommonJS), MongoDB 7 + Mongoose 8, RabbitMQ 4.2
 
 **Limitaciones del diseño:**
 
-- Con `client_credentials` no hay usuario final: las compras se asocian al cliente M2M y al asistente informado.
+- Con `client_credentials` no hay usuario final: cada compra guarda `creadaPor` (el `sub` del cliente M2M) y un cliente solo ve las suyas, pero no hay "mis compras" por persona ([ADR 0012](docs/adr/adr-0012-titularidad-trazabilidad-validacion.md)).
+- El asistente se identifica por DNI de 7 u 8 dígitos: no admite pasaportes ni documentos extranjeros. Cada compra conserva una copia (snapshot) de los datos informados.
 - Los listados no tienen paginación.
 - Las reservas abandonadas retienen cupo hasta que vencen (`RESERVA_TTL_MINUTOS`, 15 minutos por defecto), y un pago pendiente hasta que llega el resultado o vence `PAGO_TIMEOUT_MINUTOS` (30 minutos).
 - Si la pasarela cobra después de haber respondido "no conozco ese pago", la compra queda `expirada` con `reembolsoPendiente`: no hay reembolso real ([ADR 0010](docs/adr/adr-0010-ciclo-de-vida-compra-pago-conciliacion.md)).

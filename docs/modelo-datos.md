@@ -35,6 +35,8 @@ erDiagram
     ObjectId _id PK
     ObjectId eventoId FK
     ObjectId asistenteId FK
+    object asistente "snapshot nombre, email, documento"
+    string creadaPor "sub del token"
     int cantidad "1..10"
     number precioUnitario "copia"
     number total "calculado"
@@ -56,9 +58,11 @@ erDiagram
     ObjectId eventoId FK
     ObjectId asistenteId FK
     int numero "UK con compraId"
+    object titular "copia nombre y documento"
     string estado "emitida|usada|anulada"
     date emitidaEn
     date usadaEn
+    string validadaPor "sub del control de acceso"
   }
   EVENTO_PROCESADO {
     ObjectId _id PK
@@ -91,27 +95,29 @@ Todas las colecciones tienen `createdAt` y `updatedAt` (`timestamps: true`).
 **Fechas:** `fecha` es el inicio. Solo se crean, modifican o publican eventos con fecha futura, y no se venden entradas de un evento que ya comenzó.
 
 ### `asistentes`
-Persona titular de las entradas. Se crea o se reutiliza por `documento` (único) al reservar.
+Directorio de personas por `documento` (único, DNI de 7 u 8 dígitos). Se crea o se actualiza al reservar: guarda **los últimos datos informados** para ese DNI. No es la fuente del historial: cada compra conserva su propio snapshot ([ADR 0012](adr/adr-0012-titularidad-trazabilidad-validacion.md)).
 
 ### `compras`
 | Campo | Tipo | Reglas |
 |---|---|---|
 | `eventoId`, `asistenteId` | ObjectId | referencias requeridas |
+| `asistente` | subdocumento | snapshot `{ nombre, email, documento }` de lo informado al comprar. Un cambio posterior de datos para el mismo DNI no altera compras existentes |
+| `creadaPor` | string | `sub` del token del cliente que creó la compra. `GET /compras` y las operaciones por id solo ven las compras propias (404 si es ajena) |
 | `cantidad` | int | 1..10 |
 | `precioUnitario` | number | copia del precio del evento al reservar: un cambio de precio posterior no altera compras existentes |
 | `total` | number | `cantidad × precioUnitario`, lo calcula el servidor |
 | `estado` | enum | ver máquina de estados |
 | `reservaExpiraEn` | Date | creación + `RESERVA_TTL_MINUTOS` |
 | `pagoExpiraEn` | Date | se fija al pasar a `pago_pendiente`: ahora + `PAGO_TIMEOUT_MINUTOS`. Vencido, el barrido consulta a la pasarela y resuelve la compra ([ADR 0010](adr/adr-0010-ciclo-de-vida-compra-pago-conciliacion.md)) |
-| `idempotencyKey` / `idempotencyFingerprint` | string | clave del `POST /compras` (única) y hash SHA-256 del cuerpo, para detectar reutilización con otros datos |
-| `pago` | subdocumento | `estado` (`pendiente`/`aprobado`/`rechazado`), `referenciaExterna`, `idempotencyKey` del `POST /pagar`, `motivoRechazo`, `solicitadoEn`, `procesadoEn` |
+| `idempotencyKey` / `idempotencyFingerprint` | string | clave del `POST /compras` (única **por cliente**) y hash SHA-256 del cuerpo, para detectar reutilización con otros datos |
+| `pago` | subdocumento | `estado` (`pendiente`/`aprobado`/`rechazado`), `referenciaExterna`, `idempotencyKey` del `POST /pagar` (única por cliente), `motivoRechazo`, `solicitadoEn`, `procesadoEn` |
 | `emisionEvento` | subdocumento | outbox: sobre completo de `entrada.comprada` (con `eventId`), escrito junto con el cambio a `pagada` |
 | `emisionPublicadaEn` | Date | lo marca el relay cuando RabbitMQ confirma la publicación. Vacío = pendiente de publicar ([ADR 0009](adr/adr-0009-outbox-entrada-comprada.md)) |
 | `emisionEstado`, `emitidaEn` | enum, Date | estado del efecto asincrónico, separado del estado de negocio |
 | `reembolsoPendiente` | boolean | `false` por defecto. Queda en `true` cuando se cobró y la compra no tiene entrada utilizable: pago aprobado tardío sobre una compra ya resuelta ([ADR 0010](adr/adr-0010-ciclo-de-vida-compra-pago-conciliacion.md)) o evento cancelado con la compra pagada ([ADR 0011](adr/adr-0011-ciclo-de-vida-evento.md)). No existe un reembolso real: es una marca para que alguien lo gestione |
 
 ### `entradas`
-Una por unidad comprada. `codigo` es el contenido del QR: `ENT-` + 12 caracteres aleatorios `[A-Z0-9]` generados con `crypto.randomInt`. Es único y no se puede adivinar.
+Una por unidad comprada. `titular { nombre, documento }` es una copia del snapshot de la compra, para verificar al asistente en la puerta sin join y sin exponer su email. `validadaPor` registra el `sub` del cliente de control de acceso que la usó. `codigo` es el contenido del QR: `ENT-` + 12 caracteres aleatorios `[A-Z0-9]` generados con `crypto.randomInt`. Es único y no se puede adivinar.
 
 ### `eventos_procesados`
 Registro de `eventId` ya consumidos por el worker (deduplicación *at least once*).
@@ -121,6 +127,7 @@ Registro de `eventId` ya consumidos por el worker (deduplicación *at least once
 | Relación | Decisión | Motivo |
 |---|---|---|
 | Compra → Evento / Asistente | Referencia + copia de `precioUnitario` | El evento cambia independientemente (cupo, precio). La compra conserva el precio pactado |
+| Compra → Asistente | Referencia + snapshot embebido | El historial de la compra no cambia si el mismo DNI vuelve con otro nombre o email, igual que el precio. El directorio `asistentes` guarda el dato vigente |
 | Compra → Pago | Embebido | El pago no existe fuera de su compra y se actualiza junto con el estado. Un único documento permite una actualización atómica |
 | Compra → `emisionEvento` | Embebido (outbox) | Una sola escritura atómica registra el cambio a `pagada` y el evento pendiente, sin transacciones multi-documento |
 | Entrada → Compra | Colección aparte con referencia | Se consulta y se actualiza sola en el control de acceso, por `codigo`, con alta concurrencia en la puerta |
@@ -176,8 +183,9 @@ Cada transición es un `findOneAndUpdate` condicionado al estado de origen (`{ _
 |---|---|---|---|
 | `eventos` | `{ estado, fecha }` | simple | listado de eventos publicados por fecha |
 | `asistentes` | `{ documento }` | único | reutilizar asistente |
-| `compras` | `{ idempotencyKey }` | único | compra duplicada |
-| `compras` | `{ pago.idempotencyKey }` | único, sparse | pago duplicado |
+| `compras` | `{ creadaPor, idempotencyKey }` | único | compra duplicada, por cliente (migración `20261005120000-creada-por-e-idempotencia-por-cliente.js`) |
+| `compras` | `{ creadaPor, pago.idempotencyKey }` | único, parcial | pago duplicado, por cliente |
+| `compras` | `{ creadaPor, createdAt }` | simple | `GET /compras` del cliente, de lo más nuevo a lo más viejo |
 | `compras` | `{ pago.referenciaExterna }` | único, sparse | correlacionar el webhook |
 | `compras` | `{ eventoId, estado }` | simple | reporte de ventas, borrado de evento |
 | `compras` | `{ estado, reservaExpiraEn }` | simple | barrido de reservas vencidas |

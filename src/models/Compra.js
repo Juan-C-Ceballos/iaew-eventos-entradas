@@ -24,16 +24,26 @@ const emisionEventoSchema = new mongoose.Schema({
   data: { compraId: { type: String, required: true } }
 }, { _id: false });
 
+// Copia de los datos del asistente al momento de comprar: el historial no cambia si el mismo DNI
+// vuelve a comprar con otro nombre o email (ADR 0012).
+const asistenteSnapshotSchema = new mongoose.Schema({
+  nombre: { type: String, required: true, trim: true, maxlength: 120 },
+  email: { type: String, required: true, trim: true, lowercase: true, maxlength: 254 },
+  documento: { type: String, required: true, trim: true, match: /^[0-9]{7,8}$/ }
+}, { _id: false });
+
 const compraSchema = new mongoose.Schema({
   eventoId: { type: mongoose.Schema.Types.ObjectId, ref: 'Evento', required: true },
   asistenteId: { type: mongoose.Schema.Types.ObjectId, ref: 'Asistente', required: true },
+  asistente: { type: asistenteSnapshotSchema, required: true },
+  creadaPor: { type: String, required: true },
   cantidad: { type: Number, required: true, min: 1, max: 10, validate: entero },
   precioUnitario: { type: Number, required: true, min: 0 },
   total: { type: Number, required: true, min: 0 },
   estado: { type: String, enum: ESTADOS_COMPRA, default: 'pendiente' },
   reservaExpiraEn: { type: Date, required: true },
   pagoExpiraEn: { type: Date },
-  idempotencyKey: { type: String, required: true, unique: true },
+  idempotencyKey: { type: String, required: true },
   idempotencyFingerprint: { type: String, required: true },
   pago: pagoSchema,
   emisionEvento: emisionEventoSchema,
@@ -43,7 +53,10 @@ const compraSchema = new mongoose.Schema({
   emitidaEn: { type: Date }
 }, { timestamps: true, collection: 'compras' });
 
-compraSchema.index({ 'pago.idempotencyKey': 1 }, { unique: true, sparse: true });
+// Las claves de idempotencia son únicas por cliente, no globales (ADR 0012).
+compraSchema.index({ creadaPor: 1, idempotencyKey: 1 }, { unique: true });
+compraSchema.index({ creadaPor: 1, 'pago.idempotencyKey': 1 }, { unique: true, partialFilterExpression: { 'pago.idempotencyKey': { $exists: true } } });
+compraSchema.index({ creadaPor: 1, createdAt: -1 });
 compraSchema.index({ 'pago.referenciaExterna': 1 }, { unique: true, sparse: true });
 compraSchema.index({ eventoId: 1, estado: 1 });
 compraSchema.index({ estado: 1, reservaExpiraEn: 1 });

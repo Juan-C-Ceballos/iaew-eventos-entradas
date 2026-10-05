@@ -40,7 +40,7 @@ Además, el webhook de la pasarela necesita su propia autenticación, porque la 
 
 - Permisos mínimos por rol: el control de acceso no puede comprar y el canal de venta no puede modificar eventos.
 - La API no guarda credenciales de clientes. Revocar un cliente se hace en Auth0.
-- En `client_credentials` no hay usuario final. "Mis compras" no se puede filtrar por persona, solo por cliente (`sub`), y eso queda como limitación.
+- En `client_credentials` no hay usuario final. Cada compra guarda `creadaPor` (el `sub` del token) y un cliente solo ve y opera las suyas; no hay "mis compras" por persona, y eso queda como limitación ([ADR 0012](adr-0012-titularidad-trazabilidad-validacion.md)).
 - Hace falta una cuenta de Auth0 para probar los endpoints protegidos. Los pasos están en el README.
 
 ## Alternativas descartadas

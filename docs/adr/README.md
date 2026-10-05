@@ -15,3 +15,4 @@ Formato liviano (Michael Nygard): Estado, Fecha, Contexto, Decisión, Consecuenc
 | [0009](adr-0009-outbox-entrada-comprada.md) | Patrón outbox para publicar `entrada.comprada` | aceptada |
 | [0010](adr-0010-ciclo-de-vida-compra-pago-conciliacion.md) | Orden de `/pagar`, timeout de pago con conciliación contra la pasarela y reconciliación de cupo | aceptada |
 | [0011](adr-0011-ciclo-de-vida-evento.md) | Estados del evento, fechas, cierre automático y cancelación con cascada | aceptada |
+| [0012](adr-0012-titularidad-trazabilidad-validacion.md) | `creadaPor`, idempotencia por cliente, asistente como snapshot y validación por evento | aceptada |

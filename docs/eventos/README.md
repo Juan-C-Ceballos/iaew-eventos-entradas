@@ -9,7 +9,7 @@ Este documento lista los mensajes que el sistema intercambia fuera del ciclo req
 | Contrato | [`entrada-comprada.schema.json`](entrada-comprada.schema.json) (JSON Schema 2020-12, `additionalProperties: false`) |
 | Ejemplo | [`ejemplos/entrada-comprada.ejemplo.json`](ejemplos/entrada-comprada.ejemplo.json) |
 | Productor | `api`: el webhook `pago.aprobado` registra el evento en `compras.emisionEvento` (outbox) y el relay lo publica en menos de `OUTBOX_INTERVALO_MS` ([ADR 0009](../adr/adr-0009-outbox-entrada-comprada.md)) |
-| Consumidor | `worker`: emite una `Entrada` por unidad comprada y marca `compra.emisionEstado = emitida` |
+| Consumidor | `worker`: lee la compra, emite una `Entrada` por unidad comprada (con `titular` copiado del snapshot `compra.asistente`, [ADR 0012](../adr/adr-0012-titularidad-trazabilidad-validacion.md)) y marca `compra.emisionEstado = emitida`. Si el evento está cancelado, las emite ya `anulada` ([ADR 0011](../adr/adr-0011-ciclo-de-vida-evento.md)) |
 | Exchange | `entradas.exchange` (direct, durable) |
 | Routing key | `entrada.comprada` |
 | Cola | `emision.entrada-comprada` (durable) |
