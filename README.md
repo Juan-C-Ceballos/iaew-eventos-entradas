@@ -48,7 +48,7 @@ flowchart LR
 | Documento | Contenido |
 |---|---|
 | [docs/c4-context.md](docs/c4-context.md) | C4 nivel 1: actores y sistemas externos |
-| [docs/c4-container.md](docs/c4-container.md) | C4 nivel 2: contenedores (1:1 con `docker-compose.yml`) |
+| [docs/c4-container.md](docs/c4-container.md) | C4 nivel 2: contenedores (coinciden con `docker-compose.yml`, salvo la tarea de arranque `db-init`) |
 | [docs/c4-component.md](docs/c4-component.md) | C4 nivel 3: componentes de `api` + secuencia del flujo de compra |
 | [docs/openapi.json](docs/openapi.json) | Contrato OpenAPI 3.1 (también en http://localhost:3000/api-docs) |
 | [docs/modelo-datos.md](docs/modelo-datos.md) | Colecciones, índices, máquinas de estado, migraciones y seed |

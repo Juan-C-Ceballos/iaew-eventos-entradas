@@ -1,6 +1,6 @@
 # C4 — Nivel 2: Contenedores del sistema de Eventos y Entradas
 
-**Alcance:** las unidades desplegables dentro del sistema, su tecnología y cómo se comunican. Cada contenedor corresponde 1:1 a un servicio de [`docker-compose.yml`](../docker-compose.yml) con el mismo nombre.
+**Alcance:** las unidades desplegables dentro del sistema, su tecnología y cómo se comunican. Cada contenedor corresponde a un servicio de [`docker-compose.yml`](../docker-compose.yml) con el mismo nombre. La única excepción es `db-init`, que es una [tarea de arranque](#tareas-de-arranque-no-son-contenedores-c4) y no se dibuja.
 
 ```mermaid
 flowchart LR
@@ -13,7 +13,8 @@ flowchart LR
     worker["worker<br/><i>[Contenedor: Node.js 22 + amqplib]</i><br/>Consume entrada.comprada y emite entradas"]
     mongodb[("mongodb<br/><i>[Contenedor: MongoDB 7]</i><br/>eventos, asistentes, compras,<br/>entradas, eventos_procesados")]
     rabbitmq[["rabbitmq<br/><i>[Contenedor: RabbitMQ 4.2]</i><br/>entradas.exchange, retry y DLQ"]]
-    dbinit["db-init<br/><i>[Job: migrate-mongo + seed]</i><br/>Crea índices y datos iniciales"]
+    prometheus["prometheus<br/><i>[Contenedor planificado: Prometheus]</i><br/>Recolecta las métricas de la api"]
+    grafana["grafana<br/><i>[Contenedor planificado: Grafana]</i><br/>Dashboard de p95, throughput y errores"]
   end
 
   clientes -->|"Usa la API<br/>HTTPS/JSON + Bearer JWT"| api
@@ -27,8 +28,14 @@ flowchart LR
   worker -->|"Crea entradas, deduplica por eventId<br/>Mongoose"| mongodb
   worker -->|"Reintento con TTL o DLQ<br/>AMQP"| rabbitmq
   worker -->|"Consulta pagos vencidos<br/>HTTP/JSON"| pagos
-  dbinit -->|"Ejecuta migraciones y seed<br/>MongoDB driver"| mongodb
+  prometheus -->|"Lee GET /metrics<br/>HTTP"| api
+  grafana -->|"Consulta métricas<br/>PromQL sobre HTTP"| prometheus
+
+  classDef planificado stroke-dasharray: 5 5,stroke:#888,color:#666
+  class prometheus,grafana planificado
 ```
+
+**Leyenda:** rectángulo = contenedor · cilindro = base de datos · rectángulo de doble borde = broker de mensajes · **borde punteado = planificado (Entrega 2)** · flecha punteada = obtención del token, previa al uso de la API. Las flechas apuntan hacia quien **recibe** la llamada.
 
 ## Responsabilidades
 
@@ -38,8 +45,24 @@ flowchart LR
 | `worker` | Node.js 22, amqplib, Mongoose 8 | Declara la topología (igual que `api`, de forma idempotente). Consume `emision.entrada-comprada`, emite las entradas de forma idempotente y gestiona reintentos y DLQ. Además ejecuta el barrido periódico: vencimientos, conciliación de pagos con la pasarela, reconciliación de cupo y cierre de eventos ([ADR 0010](adr/adr-0010-ciclo-de-vida-compra-pago-conciliacion.md)) | — |
 | `mongodb` | MongoDB 7 | Persistencia de documentos. Garantiza unicidad con índices (ver [modelo de datos](modelo-datos.md)) | 27017 |
 | `rabbitmq` | RabbitMQ 4.2 + management | Desacopla el cobro confirmado de la emisión. Ofrece retry con TTL y DLQ | 5672, 15672 |
-| `db-init` | Misma imagen que `api` | Job de una sola ejecución: `npm run migrate && npm run seed`. `api` arranca recién cuando termina bien | — |
 | `pagos-mock` | Node.js 22 (sin dependencias) | Simula la pasarela externa: recibe el cobro y notifica el resultado por webhook firmado | 4000 |
+
+## Tareas de arranque (no son contenedores C4)
+
+Una tarea de arranque corre una vez, hace su trabajo y termina. No queda desplegada esperando nada ni se escala, así que no cumple el criterio de contenedor y dibujarla solo agregaba ruido.
+
+| Tarea | Servicio de Compose | Qué hace |
+|---|---|---|
+| `db-init` | `db-init` | Misma imagen que `api`. Ejecuta `npm run migrate && npm run seed` contra `mongodb` (índices y datos de demostración) y termina. `api` arranca recién cuando termina bien |
+
+## Contenedores planificados (Entrega 2)
+
+Todavía no existen en `docker-compose.yml`. Se dibujan con borde punteado en el diagrama. El [ADR 0008](adr/adr-0008-observabilidad-correlation-id.md) que los propone está en estado *propuesta*.
+
+| Contenedor | Tecnología | Responsabilidad |
+|---|---|---|
+| `prometheus` | Prometheus | Lee `GET /metrics` de la `api` y guarda las series para consultar p95, throughput y error rate |
+| `grafana` | Grafana | Dashboard provisionado desde el repo que consulta a Prometheus |
 
 ## Decisiones relacionadas
 
@@ -51,4 +74,4 @@ flowchart LR
 - Outbox: [ADR 0009](adr/adr-0009-outbox-entrada-comprada.md)
 - Ciclo de vida de la compra, conciliación de pagos y reconciliación de cupo: [ADR 0010](adr/adr-0010-ciclo-de-vida-compra-pago-conciliacion.md)
 
-**Evolución (Entrega 2):** se suman `prometheus` y `grafana` para el dashboard de p95, throughput y error rate ([ADR 0008](adr/adr-0008-observabilidad-correlation-id.md)).
+**Evolución (Entrega 2):** `prometheus` y `grafana` pasan de planificados a contenedores reales ([ADR 0008](adr/adr-0008-observabilidad-correlation-id.md)); cuando se agreguen al Compose, se mueven a la tabla de responsabilidades.

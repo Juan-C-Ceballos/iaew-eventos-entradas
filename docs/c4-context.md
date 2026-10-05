@@ -28,6 +28,8 @@ flowchart LR
   pasarela -->|"Notifica pago aprobado o rechazado<br/>Webhook HTTPS + firma HMAC"| sistema
 ```
 
+**Leyenda:** rectángulo = persona o sistema (el sistema propio es el que está en **negrita**; los demás son clientes o sistemas externos) · flecha continua = el origen inicia una llamada hacia el destino · **flecha punteada = obtención del token**, previa al uso de la API.
+
 ## Elementos
 
 | Elemento | Tipo | Responsabilidad | Scopes / credencial |

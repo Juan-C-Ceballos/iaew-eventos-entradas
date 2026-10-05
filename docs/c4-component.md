@@ -23,7 +23,6 @@ flowchart LR
     clientePagos["Cliente de pasarela<br/><i>HTTP</i>"]
     modelos["Modelos Mongoose<br/><i>Evento, Asistente, Compra,<br/>Entrada, EventoProcesado</i>"]
     relay["Relay del outbox<br/><i>publica entrada.comprada<br/>pendientes cada 1 s</i>"]
-    errores["Formato de errores<br/><i>sendError</i>"]
   end
 
   cliente -->|"HTTPS + Bearer"| routers
@@ -46,8 +45,14 @@ flowchart LR
   svcCompras -->|"Lee y persiste"| modelos
   svcEntradas -->|"Lee y persiste"| modelos
   modelos -->|"Mongoose"| mongo
-  routers -->|"Responde errores uniformes"| errores
+
+  classDef planificado stroke-dasharray: 5 5,stroke:#888,color:#666
+  class routers,firma,idem,svcEventos,svcCompras,svcEntradas,clientePagos planificado
 ```
+
+**Leyenda:** rectángulo = componente · cilindro = base de datos · rectángulo de doble borde = broker de mensajes · **borde punteado = planificado (Entrega 2)**; sin punteado = ya implementado. Las flechas apuntan hacia quien **recibe** la llamada.
+
+El formato de error uniforme ([`src/lib/errors.js`](../src/lib/errors.js), [ADR 0001](adr/adr-0001-estilo-api-rest.md)) lo usan todos los componentes: por eso no se dibuja como un componente más.
 
 ## Componentes y ubicación en el código
 
@@ -62,7 +67,6 @@ flowchart LR
 | Cliente de pasarela | `src/lib/pagos.js` | Entrega 2 |
 | Modelos Mongoose | [`src/models/`](../src/models) | Implementado |
 | Relay del outbox | [`src/lib/outbox.js`](../src/lib/outbox.js) + [`src/lib/rabbit.js`](../src/lib/rabbit.js) | Implementado (ADR 0009) |
-| Formato de errores | [`src/lib/errors.js`](../src/lib/errors.js) | Implementado |
 
 ## Secuencia del flujo multi-paso
 

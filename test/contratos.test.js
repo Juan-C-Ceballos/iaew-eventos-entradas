@@ -70,15 +70,26 @@ test('el evento en OpenAPI coincide con el JSON Schema publicado', () => {
 });
 
 test('los servicios de docker-compose.yml coinciden con los de la vista C4 Container', () => {
+  // Las tareas de arranque corren una vez y terminan: no son contenedores C4 (se documentan aparte).
+  const TAREAS_DE_ARRANQUE = ['db-init'];
+
   const compose = readText('docker-compose.yml');
   const servicesBlock = compose.split(/^services:\s*$/m)[1].split(/^\S/m)[0];
   const enCompose = [...servicesBlock.matchAll(/^ {2}([a-z0-9-]+):\s*$/gm)].map((match) => match[1]).sort();
   assert.ok(enCompose.length >= 5, `servicios detectados: ${enCompose}`);
 
-  // La tabla "Responsabilidades" del C4 lista un contenedor por fila: | `servicio` | ...
   const c4 = readText('docs/c4-container.md');
-  const enC4 = [...c4.matchAll(/^\| `([a-z0-9-]+)` \|/gm)].map((match) => match[1]).sort();
+  const seccion = (titulo) => (c4.split(new RegExp(`^## ${titulo}\\s*$`, 'm'))[1] || '').split(/^## /m)[0];
+  // Cada tabla lista un elemento por fila: | `servicio` | ...
+  const filas = (texto) => [...texto.matchAll(/^\| `([a-z0-9-]+)` \|/gm)].map((match) => match[1]).sort();
 
-  assert.deepEqual(enCompose.filter((servicio) => !enC4.includes(servicio)), [], 'servicios de Compose sin documentar en docs/c4-container.md');
-  assert.deepEqual(enC4.filter((servicio) => !enCompose.includes(servicio)), [], 'contenedores del C4 que no existen en docker-compose.yml');
+  const contenedores = filas(seccion('Responsabilidades'));
+  const tareas = filas(seccion('Tareas de arranque \\(no son contenedores C4\\)'));
+  const planificados = filas(seccion('Contenedores planificados \\(Entrega 2\\)'));
+
+  assert.deepEqual(tareas, [...TAREAS_DE_ARRANQUE].sort(), 'las tareas de arranque del C4 no coinciden con las esperadas');
+  const esperados = enCompose.filter((servicio) => !TAREAS_DE_ARRANQUE.includes(servicio));
+  assert.deepEqual(esperados.filter((s) => !contenedores.includes(s)), [], 'servicios de Compose sin documentar en la tabla de contenedores del C4');
+  assert.deepEqual(contenedores.filter((s) => !esperados.includes(s)), [], 'contenedores del C4 que no existen en docker-compose.yml');
+  assert.deepEqual(planificados.filter((s) => enCompose.includes(s)), [], 'un contenedor ya existe en Compose pero sigue marcado como planificado');
 });
