@@ -13,3 +13,5 @@ Formato liviano (Michael Nygard): Estado, Fecha, Contexto, Decisión, Consecuenc
 | [0007](adr-0007-reserva-cupo-idempotencia.md) | Reserva de cupo con update atómico condicional, más Idempotency-Key | aceptada |
 | [0008](adr-0008-observabilidad-correlation-id.md) | Correlation ID, logs JSON y métricas para el dashboard | propuesta |
 | [0009](adr-0009-outbox-entrada-comprada.md) | Patrón outbox para publicar `entrada.comprada` | aceptada |
+| [0010](adr-0010-ciclo-de-vida-compra-pago-conciliacion.md) | Orden de `/pagar`, timeout de pago con conciliación contra la pasarela y reconciliación de cupo | aceptada |
+| [0011](adr-0011-ciclo-de-vida-evento.md) | Estados del evento, fechas, cierre automático y cancelación con cascada | aceptada |

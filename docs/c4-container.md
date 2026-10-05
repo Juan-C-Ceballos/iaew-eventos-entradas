@@ -26,6 +26,7 @@ flowchart LR
   rabbitmq -->|"Entrega al menos una vez<br/>AMQP, ack manual"| worker
   worker -->|"Crea entradas, deduplica por eventId<br/>Mongoose"| mongodb
   worker -->|"Reintento con TTL o DLQ<br/>AMQP"| rabbitmq
+  worker -->|"Consulta pagos vencidos<br/>HTTP/JSON"| pagos
   dbinit -->|"Ejecuta migraciones y seed<br/>MongoDB driver"| mongodb
 ```
 
@@ -34,7 +35,7 @@ flowchart LR
 | Contenedor | Tecnología | Responsabilidad | Puertos (host) |
 |---|---|---|---|
 | `api` | Node.js 22, Express 4, Mongoose 8, express-oauth2-jwt-bearer, amqplib | Expone el contrato [`openapi.json`](openapi.json) y la documentación en `/api-docs`. Valida JWT (firma, issuer, audience, expiración) y scopes, y `x-api-key` en `/internal`. Aplica `Idempotency-Key`, reserva cupo de forma atómica, verifica la firma HMAC del webhook y publica `entrada.comprada` con el relay del outbox | 3000 |
-| `worker` | Node.js 22, amqplib, Mongoose 8 | Declara la topología (igual que `api`, de forma idempotente). Consume `emision.entrada-comprada`, emite las entradas de forma idempotente y gestiona reintentos y DLQ | — |
+| `worker` | Node.js 22, amqplib, Mongoose 8 | Declara la topología (igual que `api`, de forma idempotente). Consume `emision.entrada-comprada`, emite las entradas de forma idempotente y gestiona reintentos y DLQ. Además ejecuta el barrido periódico: vencimientos, conciliación de pagos con la pasarela, reconciliación de cupo y cierre de eventos ([ADR 0010](adr/adr-0010-ciclo-de-vida-compra-pago-conciliacion.md)) | — |
 | `mongodb` | MongoDB 7 | Persistencia de documentos. Garantiza unicidad con índices (ver [modelo de datos](modelo-datos.md)) | 27017 |
 | `rabbitmq` | RabbitMQ 4.2 + management | Desacopla el cobro confirmado de la emisión. Ofrece retry con TTL y DLQ | 5672, 15672 |
 | `db-init` | Misma imagen que `api` | Job de una sola ejecución: `npm run migrate && npm run seed`. `api` arranca recién cuando termina bien | — |
@@ -48,5 +49,6 @@ flowchart LR
 - RabbitMQ: [ADR 0005](adr/adr-0005-broker-rabbitmq.md)
 - Webhook de pago: [ADR 0006](adr/adr-0006-webhook-pago-hmac.md)
 - Outbox: [ADR 0009](adr/adr-0009-outbox-entrada-comprada.md)
+- Ciclo de vida de la compra, conciliación de pagos y reconciliación de cupo: [ADR 0010](adr/adr-0010-ciclo-de-vida-compra-pago-conciliacion.md)
 
 **Evolución (Entrega 2):** se suman `prometheus` y `grafana` para el dashboard de p95, throughput y error rate ([ADR 0008](adr/adr-0008-observabilidad-correlation-id.md)).

@@ -5,7 +5,7 @@ const { connectDb, closeDb } = require('./db');
 const { validateAccessToken } = require('./middleware/auth0');
 const { sendError } = require('./lib/errors');
 const { openapi, pendingRoutes } = require('./lib/contrato');
-const { integerFromEnv } = require('./lib/config');
+const { integerFromEnv, plazosConfig } = require('./lib/config');
 const { iniciarRelay } = require('./lib/outbox');
 const { closeRabbit } = require('./lib/rabbit');
 
@@ -44,6 +44,7 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
 });
 
 if (require.main === module) {
+  plazosConfig(); // falla al arrancar si PAGO_TIMEOUT_MINUTOS u otro plazo es inválido
   let detenerRelay = () => {};
   connectDb()
     .then(() => {

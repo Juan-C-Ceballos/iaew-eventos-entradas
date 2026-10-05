@@ -3,12 +3,19 @@ const { connectDb, closeDb } = require('../src/db');
 const Evento = require('../src/models/Evento');
 
 // Ids fijos + $setOnInsert: correr el seed N veces no duplica ni pisa datos (no repone cupo vendido).
+// Las fechas son relativas al primer seed, así los eventos publicados siguen vendiendo en la demo (ADR 0011).
+const enDias = (dias, hora) => {
+  const fecha = new Date(Date.now() + dias * 24 * 60 * 60 * 1000);
+  fecha.setHours(hora, 0, 0, 0);
+  return fecha;
+};
+
 const EVENTOS = [
   {
     _id: '66f000000000000000000001',
     nombre: 'Recital de Rock Sinfónico',
     descripcion: 'Orquesta y banda en vivo. Evento de demostración con cupo amplio.',
-    fecha: new Date('2026-11-20T21:00:00-03:00'),
+    fecha: enDias(45, 21),
     lugar: 'Estadio Ciudad — Córdoba',
     capacidad: 500,
     cupoDisponible: 500,
@@ -19,7 +26,7 @@ const EVENTOS = [
     _id: '66f000000000000000000002',
     nombre: 'Charla íntima de Jazz',
     descripcion: 'Cupo de 2 entradas para demostrar el error de evento agotado.',
-    fecha: new Date('2026-11-27T20:00:00-03:00'),
+    fecha: enDias(52, 20),
     lugar: 'Sala Pequeña — Córdoba',
     capacidad: 2,
     cupoDisponible: 2,
@@ -30,7 +37,7 @@ const EVENTOS = [
     _id: '66f000000000000000000003',
     nombre: 'Obra de teatro (en preparación)',
     descripcion: 'Evento en borrador: no admite compras.',
-    fecha: new Date('2026-12-10T20:30:00-03:00'),
+    fecha: enDias(65, 20),
     lugar: 'Teatro Central — Córdoba',
     capacidad: 300,
     cupoDisponible: 300,

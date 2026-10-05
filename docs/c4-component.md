@@ -85,9 +85,15 @@ sequenceDiagram
     A-->>C: 201 compra pendiente
   end
   C->>A: POST /compras/{id}/pagar (Idempotency-Key)
-  A->>P: POST /pagos (compraId, monto)
-  A->>M: compra → pago_pendiente
-  A-->>C: 202 pago solicitado
+  A->>M: compra pendiente → pago_pendiente (condicional, fija pagoExpiraEn)
+  A->>P: POST /pagos (compraId, monto, Idempotency-Key)
+  alt la pasarela no responde
+    A-->>C: 503 (sigue en pago_pendiente; reintentar con la misma clave)
+  else acepta el cobro
+    P-->>A: referenciaExterna
+    A->>M: guarda pago.referenciaExterna
+    A-->>C: 202 pago solicitado
+  end
   P->>A: POST /webhooks/pagos (X-Pago-Firma, X-Pago-Timestamp)
   alt pago.aprobado
     A->>M: compra → pagada + emisionEvento (eventId), una sola escritura
@@ -103,6 +109,23 @@ sequenceDiagram
     A->>M: compra → rechazada y devuelve el cupo ($inc +n)
     A-->>P: 200
   end
+  opt el webhook no llegó antes de pagoExpiraEn
+    W->>P: GET /pagos?compraId (barrido)
+    W->>M: pagada + outbox, rechazada o expirada (libera cupo)
+  end
   C->>A: GET /compras/{id}/entradas
   A-->>C: 200 entradas emitidas
 ```
+
+## Componentes del contenedor `worker`
+
+El `worker` tiene dos responsabilidades: consumir `entrada.comprada` y ejecutar un **barrido** periódico (`BARRIDO_INTERVALO_MS`, 60 s). Todas las transiciones del barrido son `findOneAndUpdate` condicionales, así que varias réplicas pueden convivir ([ADR 0010](adr/adr-0010-ciclo-de-vida-compra-pago-conciliacion.md)).
+
+| Componente | Responsabilidad | Estado |
+|---|---|---|
+| Declaración de topología | `declararTopologia` en [`src/lib/rabbit.js`](../src/lib/rabbit.js): exchanges, colas, retry y DLQ (la misma que ejecuta `api`) | Implementado |
+| Consumidor de `entrada.comprada` | Deduplica por `eventId`, emite las entradas, gestiona retry y DLQ | Entrega 2 |
+| Barrido de vencimientos | Reservas `pendiente` vencidas → `expirada` y libera cupo | Entrega 2 |
+| Conciliación de pagos | Compras `pago_pendiente` con `pagoExpiraEn` vencido: consulta `GET /pagos?compraId` a la pasarela y resuelve la compra | Entrega 2 |
+| Reconciliación de cupo | Recalcula el cupo esperado por evento y lo corrige si la diferencia persiste dos barridos | Entrega 2 |
+| Cierre de eventos | `publicado` → `finalizado` pasadas `EVENTO_FINALIZA_TRAS_HORAS` de la fecha, y cascada de cancelación ([ADR 0011](adr/adr-0011-ciclo-de-vida-evento.md)) | Entrega 2 |

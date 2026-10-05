@@ -32,12 +32,14 @@ const compraSchema = new mongoose.Schema({
   total: { type: Number, required: true, min: 0 },
   estado: { type: String, enum: ESTADOS_COMPRA, default: 'pendiente' },
   reservaExpiraEn: { type: Date, required: true },
+  pagoExpiraEn: { type: Date },
   idempotencyKey: { type: String, required: true, unique: true },
   idempotencyFingerprint: { type: String, required: true },
   pago: pagoSchema,
   emisionEvento: emisionEventoSchema,
   emisionPublicadaEn: { type: Date },
   emisionEstado: { type: String, enum: ['pendiente', 'emitida'] },
+  reembolsoPendiente: { type: Boolean, default: false },
   emitidaEn: { type: Date }
 }, { timestamps: true, collection: 'compras' });
 
@@ -45,6 +47,7 @@ compraSchema.index({ 'pago.idempotencyKey': 1 }, { unique: true, sparse: true })
 compraSchema.index({ 'pago.referenciaExterna': 1 }, { unique: true, sparse: true });
 compraSchema.index({ eventoId: 1, estado: 1 });
 compraSchema.index({ estado: 1, reservaExpiraEn: 1 });
+compraSchema.index({ estado: 1, pagoExpiraEn: 1 });
 compraSchema.index({ estado: 1, emisionPublicadaEn: 1 });
 
 module.exports = mongoose.model('Compra', compraSchema);

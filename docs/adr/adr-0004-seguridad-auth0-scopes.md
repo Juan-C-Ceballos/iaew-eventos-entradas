@@ -24,7 +24,7 @@ Además, el webhook de la pasarela necesita su propia autenticación, porque la 
    | Scope | Operaciones |
    |---|---|
    | `read:eventos` | `GET /eventos`, `GET /eventos/{id}` |
-   | `write:eventos` | `POST /eventos`, `PATCH /eventos/{id}` |
+   | `write:eventos` | `POST /eventos`, `PATCH /eventos/{id}`, `POST /eventos/{id}/cancelar` |
    | `admin:eventos` | `DELETE /eventos/{id}` |
    | `buy:entradas` | `POST/GET /compras`, `GET /compras/{id}`, `/pagar`, `/cancelar`, `GET /compras/{id}/entradas` |
    | `validate:entradas` | `GET /entradas/{codigo}`, `POST /entradas/{codigo}/validar` |

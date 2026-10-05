@@ -82,6 +82,9 @@ cp .env.example .env
 | `PAGOS_URL`, `WEBHOOK_URL` | Pasarela simulada y URL del webhook | `http://localhost:4000`, `http://localhost:3000/webhooks/pagos` |
 | `WEBHOOK_SECRET`, `WEBHOOK_TOLERANCIA_SEGUNDOS` | Secreto HMAC compartido y ventana anti-replay | `colocar-secreto-compartido-local`, `300` |
 | `RESERVA_TTL_MINUTOS` | Vencimiento de una reserva sin pagar | `15` |
+| `PAGO_TIMEOUT_MINUTOS` | Cuánto espera un pago pendiente antes de que el barrido lo concilie con la pasarela | `30` |
+| `BARRIDO_INTERVALO_MS` | Cada cuánto corre el barrido del worker (vencimientos, conciliación de pagos, cupo) | `60000` |
+| `EVENTO_FINALIZA_TRAS_HORAS` | Horas después de la fecha del evento en que pasa a `finalizado` | `12` |
 
 `.env` está en `.gitignore`. **Nunca se commitean valores reales.**
 
@@ -162,7 +165,7 @@ Detener: `docker compose down`. Borrar también los datos: `docker compose down 
 
 ## 11. Datos iniciales
 
-El job `db-init` corre `npm run migrate` (índices con migrate-mongo) y `npm run seed` (3 eventos de demostración) antes de que arranque la API. Ambos son idempotentes. Detalle en [docs/modelo-datos.md](docs/modelo-datos.md#estrategia-de-migraciones-y-seed).
+El job `db-init` corre `npm run migrate` (índices con migrate-mongo) y `npm run seed` (3 eventos de demostración, con fechas a 45, 52 y 65 días de la primera ejecución para que sigan vendiendo) antes de que arranque la API. Ambos son idempotentes. Detalle en [docs/modelo-datos.md](docs/modelo-datos.md#estrategia-de-migraciones-y-seed).
 
 | Evento | Id | Para probar |
 |---|---|---|
@@ -216,6 +219,8 @@ Contrato y topología: [docs/eventos/README.md](docs/eventos/README.md).
 - `{"escenario":"rechazado"}`: la compra queda `rechazada` y se libera el cupo (`GET /eventos/{id}`).
 - Firma alterada o timestamp viejo: 401 `WEBHOOK_SIGNATURE_INVALID` / `WEBHOOK_TIMESTAMP_EXPIRED`.
 - Notificación repetida: 200 con `duplicado: true`, sin efectos dobles.
+- Webhook que nunca llega: al vencer `pagoExpiraEn` (`PAGO_TIMEOUT_MINUTOS`), el barrido del worker consulta `GET /pagos?compraId=` a la pasarela y resuelve la compra (`pagada`, `rechazada` o `expirada`). Para provocarlo, apagar `pagos-mock` después de `/pagar` y bajar `PAGO_TIMEOUT_MINUTOS` y `BARRIDO_INTERVALO_MS`.
+- Pasarela caída al pagar: `/pagar` responde 503 y la compra queda en `pago_pendiente`. Reintentar con la misma `Idempotency-Key` vuelve a enviar el cobro.
 
 Diseño: [ADR 0006](docs/adr/adr-0006-webhook-pago-hmac.md).
 
@@ -237,7 +242,8 @@ Diseño: [ADR 0006](docs/adr/adr-0006-webhook-pago-hmac.md).
 | `GET /health` | pública | Estado del servicio |
 | `GET /token-info` | Bearer (cualquier scope) | Diagnóstico del token |
 | `GET /eventos`, `GET /eventos/{id}` | `read:eventos` | Listar y obtener eventos |
-| `POST /eventos`, `PATCH /eventos/{id}` | `write:eventos` | Crear y modificar eventos |
+| `POST /eventos`, `PATCH /eventos/{id}` | `write:eventos` | Crear, modificar y publicar eventos |
+| `POST /eventos/{id}/cancelar` | `write:eventos` | Cancelar un evento: corta ventas y anula entradas |
 | `DELETE /eventos/{id}` | `admin:eventos` | Eliminar un evento sin ventas |
 | `POST /compras` | `buy:entradas` + `Idempotency-Key` | Paso 1: reservar cupo |
 | `POST /compras/{id}/pagar` | `buy:entradas` + `Idempotency-Key` | Paso 2: solicitar el pago (202) |
@@ -273,21 +279,24 @@ Stack: **Node.js 22 + Express 4 (CommonJS), MongoDB 7 + Mongoose 8, RabbitMQ 4.2
 | [0007](docs/adr/adr-0007-reserva-cupo-idempotencia.md) | Reserva de cupo atómica + Idempotency-Key |
 | [0008](docs/adr/adr-0008-observabilidad-correlation-id.md) | Correlation ID, logs JSON y métricas (propuesta) |
 | [0009](docs/adr/adr-0009-outbox-entrada-comprada.md) | Patrón outbox para publicar `entrada.comprada` |
+| [0010](docs/adr/adr-0010-ciclo-de-vida-compra-pago-conciliacion.md) | Orden de `/pagar`, timeout de pago con conciliación y reconciliación de cupo |
+| [0011](docs/adr/adr-0011-ciclo-de-vida-evento.md) | Estados del evento, fechas, cierre automático y cancelación con cascada |
 
 ## 18. Limitaciones conocidas y mejoras futuras
 
 **Límites deliberados de la Entrega 1:**
 
 - Las operaciones de negocio responden `501 NOT_IMPLEMENTED`.
-- El `worker` declara la topología pero todavía no consume.
+- El `worker` declara la topología pero todavía no consume ni ejecuta el barrido (vencimientos, conciliación de pagos y reconciliación de cupo).
 - `pagos-mock` solo expone `/health`.
 
 **Limitaciones del diseño:**
 
 - Con `client_credentials` no hay usuario final: las compras se asocian al cliente M2M y al asistente informado.
 - Los listados no tienen paginación.
-- Las reservas abandonadas retienen cupo hasta que vencen (`RESERVA_TTL_MINUTOS`, 15 minutos por defecto).
-- No hay reembolsos: una compra `pagada` no se cancela.
+- Las reservas abandonadas retienen cupo hasta que vencen (`RESERVA_TTL_MINUTOS`, 15 minutos por defecto), y un pago pendiente hasta que llega el resultado o vence `PAGO_TIMEOUT_MINUTOS` (30 minutos).
+- Si la pasarela cobra después de haber respondido "no conozco ese pago", la compra queda `expirada` con `reembolsoPendiente`: no hay reembolso real ([ADR 0010](docs/adr/adr-0010-ciclo-de-vida-compra-pago-conciliacion.md)).
+- No hay reembolsos: una compra `pagada` no se cancela. Si el evento se cancela, la compra queda con `reembolsoPendiente: true` y sus entradas `anuladas` ([ADR 0011](docs/adr/adr-0011-ciclo-de-vida-evento.md)).
 
 **Mejoras futuras:**
 

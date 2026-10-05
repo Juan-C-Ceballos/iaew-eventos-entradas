@@ -12,7 +12,8 @@ const eventoSchema = new mongoose.Schema({
   capacidad: { type: Number, required: true, min: 1, validate: entero },
   cupoDisponible: { type: Number, required: true, min: 0, validate: entero },
   precio: { type: Number, required: true, min: 0 },
-  estado: { type: String, enum: ESTADOS_EVENTO, default: 'borrador' }
+  estado: { type: String, enum: ESTADOS_EVENTO, default: 'borrador' },
+  cancelacionProcesadaEn: { type: Date }
 }, { timestamps: true, collection: 'eventos' });
 
 eventoSchema.index({ estado: 1, fecha: 1 });
