@@ -35,7 +35,7 @@
       "get": {
         "tags": ["Operación"],
         "summary": "Diagnóstico del access token recibido",
-        "description": "Devuelve issuer, audience, subject y scopes del token. No exige scopes: sirve para verificar la configuración de Auth0.",
+        "description": "Devuelve issuer, audience, subject, scopes y la vigencia del token (`issuedAt`, `expiresAt`, `expiresInSeconds`). No exige scopes: sirve para verificar la configuración de Auth0 y el TTL del token (ADR 0004).",
         "operationId": "obtenerInfoToken",
         "security": [{ "oauth2": [] }],
         "responses": {
@@ -716,7 +716,10 @@
           "issuer": { "type": "string" },
           "audience": { "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] },
           "subject": { "type": "string" },
-          "scopes": { "type": "string", "description": "Scopes separados por espacio." }
+          "scopes": { "type": "string", "description": "Scopes separados por espacio." },
+          "issuedAt": { "type": "string", "format": "date-time" },
+          "expiresAt": { "type": "string", "format": "date-time", "description": "Vencimiento (`exp`). Pasado ese instante la API responde 401 `TOKEN_INVALID`." },
+          "expiresInSeconds": { "type": "integer", "minimum": 0, "description": "Segundos que le quedan al token." }
         }
       },
       "Error": {

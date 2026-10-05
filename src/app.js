@@ -7,22 +7,19 @@ const { sendError } = require('./lib/errors');
 const { openapi, pendingRoutes } = require('./lib/contrato');
 const { integerFromEnv, plazosConfig } = require('./lib/config');
 const { iniciarRelay } = require('./lib/outbox');
+const { describirToken } = require('./lib/token');
+const { jsonBody } = require('./lib/jsonBody');
 const { closeRabbit } = require('./lib/rabbit');
 
 const app = express();
 const port = process.env.PORT || 3000;
 
-app.use(express.json());
+app.use(jsonBody);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 app.get('/api-docs/openapi.json', (req, res) => res.json(openapi));
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openapi));
-app.get('/token-info', validateAccessToken, (req, res) => res.json({
-  issuer: req.auth.payload.iss,
-  audience: req.auth.payload.aud,
-  subject: req.auth.payload.sub,
-  scopes: req.auth.payload.scope
-}));
+app.get('/token-info', validateAccessToken, (req, res) => res.json(describirToken(req.auth.payload)));
 
 // Operaciones del contrato aún no implementadas: responden 501 en vez de 404 para que
 // el esqueleto refleje el contrato completo. Cada router real se monta antes que esto.

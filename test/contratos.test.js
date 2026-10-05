@@ -69,13 +69,16 @@ test('el evento en OpenAPI coincide con el JSON Schema publicado', () => {
   assert.deepEqual(Object.keys(enOpenapi.properties).sort(), Object.keys(eventSchema.properties).sort());
 });
 
-test('los servicios de docker-compose.yml coinciden con la vista C4 Container', () => {
+test('los servicios de docker-compose.yml coinciden con los de la vista C4 Container', () => {
   const compose = readText('docker-compose.yml');
   const servicesBlock = compose.split(/^services:\s*$/m)[1].split(/^\S/m)[0];
-  const services = [...servicesBlock.matchAll(/^ {2}([a-z0-9-]+):\s*$/gm)].map((match) => match[1]);
+  const enCompose = [...servicesBlock.matchAll(/^ {2}([a-z0-9-]+):\s*$/gm)].map((match) => match[1]).sort();
+  assert.ok(enCompose.length >= 5, `servicios detectados: ${enCompose}`);
+
+  // La tabla "Responsabilidades" del C4 lista un contenedor por fila: | `servicio` | ...
   const c4 = readText('docs/c4-container.md');
-  assert.ok(services.length >= 5, `servicios detectados: ${services}`);
-  for (const service of services) {
-    assert.ok(c4.includes(`\`${service}\``), `docs/c4-container.md no documenta el servicio ${service}`);
-  }
+  const enC4 = [...c4.matchAll(/^\| `([a-z0-9-]+)` \|/gm)].map((match) => match[1]).sort();
+
+  assert.deepEqual(enCompose.filter((servicio) => !enC4.includes(servicio)), [], 'servicios de Compose sin documentar en docs/c4-container.md');
+  assert.deepEqual(enC4.filter((servicio) => !enCompose.includes(servicio)), [], 'contenedores del C4 que no existen en docker-compose.yml');
 });

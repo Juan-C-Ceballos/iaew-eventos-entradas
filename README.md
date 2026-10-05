@@ -22,7 +22,7 @@ Un organizador publica eventos con capacidad limitada. Un canal de venta compra 
 
 | Requisito de la consigna | Cómo se cubre |
 |---|---|
-| CRUD de 2 entidades | **Eventos** (CRUD completo) y **Compras** (crear, leer, listar, cancelar) |
+| CRUD de 2 entidades | **Eventos** (CRUD completo) y **Compras** (crear = reservar, leer, actualizar = pagar y eliminar = cancelar, como baja lógica; [ADR 0001](docs/adr/adr-0001-estilo-api-rest.md)) |
 | Transacción multi-paso | Reservar cupo → pagar (pasarela simulada) → confirmar por webhook → emitir entradas |
 | OAuth 2.0 + JWT con scopes | Auth0 `client_credentials` con `read:eventos`, `write:eventos`, `admin:eventos`, `buy:entradas` y `validate:entradas` |
 | Endpoint con `x-api-key` | `GET /internal/reportes/ventas` |
@@ -101,7 +101,8 @@ cp .env.example .env
    | `iaew-canal-venta` | `read:eventos`, `buy:entradas` |
    | `iaew-control-acceso` | `validate:entradas` |
 
-5. Copiar el **Domain** de la aplicación (por ejemplo `dev-xxxx.us.auth0.com`, sin `https://`) a `AUTH0_DOMAIN`, y su Client ID y Client Secret a `AUTH0_CLIENT_ID` y `AUTH0_CLIENT_SECRET` en `.env`. Después, recrear la API para que tome los valores: `docker compose up -d api`.
+5. **Expiración del token:** en *APIs → IAEW Eventos API → Settings*, poner **Token Expiration (Seconds)** en `3600` (por defecto es `86400`). La API valida `exp` y rechaza un token vencido con 401 `TOKEN_INVALID` ([ADR 0004](docs/adr/adr-0004-seguridad-auth0-scopes.md)).
+6. Copiar el **Domain** de la aplicación (por ejemplo `dev-xxxx.us.auth0.com`, sin `https://`) a `AUTH0_DOMAIN`, y su Client ID y Client Secret a `AUTH0_CLIENT_ID` y `AUTH0_CLIENT_SECRET` en `.env`. Después, recrear la API para que tome los valores: `docker compose up -d api`.
 
 ## 7. Obtener un token (`client_credentials`)
 
@@ -115,12 +116,14 @@ TOKEN=$(curl -s --request POST "https://$AUTH0_DOMAIN/oauth/token" \
 
 ## 8. Probar endpoints protegidos con Bearer
 
-Esto ya funciona en la Entrega 1: `/token-info` muestra `iss`, `aud`, `sub` y los scopes del token.
+Esto ya funciona en la Entrega 1: `/token-info` muestra `iss`, `aud`, `sub`, los scopes y la vigencia del token (`issuedAt`, `expiresAt`, `expiresInSeconds`).
 
 ```bash
 curl -s http://localhost:3000/token-info -H "Authorization: Bearer $TOKEN"
 curl -i http://localhost:3000/token-info                          # 401 TOKEN_INVALID
 ```
+
+Para ver la expiración en acción: bajar *Token Expiration* a `60`, pedir un token, esperar más de un minuto y repetir la llamada. Responde 401 `TOKEN_INVALID`; con un token nuevo vuelve a 200. Restaurar `3600` después. Los clientes deben reutilizar el token hasta que se acerque a `expiresAt` y no pedir uno por request.
 
 **(Entrega 2)** Con el scope correcto, `GET /eventos` responde 200. Sin el scope responde 403 `SCOPE_REQUIRED`.
 
@@ -178,9 +181,9 @@ Para ver el estado de las migraciones: `npm run migrate:status`.
 ## 12. Ejecutar las pruebas
 
 ```bash
-npm test               # node --test: smoke de la API y coherencia del contrato, el evento, el compose y el C4
+npm test               # node --test: smoke de la API, RabbitMQ, outbox, config y token; coherencia del contrato, el evento, el compose, el C4, los índices de las migraciones y los enlaces de la documentación
 npm run check          # sintaxis de los puntos de entrada
-npm run lint:openapi   # valida docs/openapi.json con Redocly
+npm run lint:openapi   # valida docs/openapi.json con Redocly (reglas en redocly.yaml)
 docker compose config --quiet
 ```
 
@@ -296,6 +299,8 @@ Stack: **Node.js 22 + Express 4 (CommonJS), MongoDB 7 + Mongoose 8, RabbitMQ 4.2
 - Con `client_credentials` no hay usuario final: cada compra guarda `creadaPor` (el `sub` del cliente M2M) y un cliente solo ve las suyas, pero no hay "mis compras" por persona ([ADR 0012](docs/adr/adr-0012-titularidad-trazabilidad-validacion.md)).
 - El asistente se identifica por DNI de 7 u 8 dígitos: no admite pasaportes ni documentos extranjeros. Cada compra conserva una copia (snapshot) de los datos informados.
 - Los listados no tienen paginación.
+- Un token revocado en Auth0 sigue valiendo hasta su `exp` (la API valida la firma, no consulta a Auth0 en cada request); por eso el TTL es corto.
+- `mongodb` y `rabbitmq` publican sus puertos en el host: MongoDB sin autenticación y RabbitMQ con credenciales de desarrollo (`iaew` / `iaew-local`). Es una configuración solo para uso local y no debe desplegarse así.
 - Las reservas abandonadas retienen cupo hasta que vencen (`RESERVA_TTL_MINUTOS`, 15 minutos por defecto), y un pago pendiente hasta que llega el resultado o vence `PAGO_TIMEOUT_MINUTOS` (30 minutos).
 - Si la pasarela cobra después de haber respondido "no conozco ese pago", la compra queda `expirada` con `reembolsoPendiente`: no hay reembolso real ([ADR 0010](docs/adr/adr-0010-ciclo-de-vida-compra-pago-conciliacion.md)).
 - No hay reembolsos: una compra `pagada` no se cancela. Si el evento se cancela, la compra queda con `reembolsoPendiente: true` y sus entradas `anuladas` ([ADR 0011](docs/adr/adr-0011-ciclo-de-vida-evento.md)).
@@ -324,13 +329,14 @@ docker-compose.yml        api, worker, mongodb, rabbitmq, db-init, pagos-mock
 Dockerfile                imagen de api / worker / db-init
 .env.example              variables de referencia (sin secretos)
 migrate-mongo-config.js   configuración de migraciones
+redocly.yaml              reglas del lint de OpenAPI
 migrations/               migraciones versionadas (índices)
 scripts/seed.js           seed idempotente
 src/
   app.js                  API Express (health, api-docs, token-info, contrato)
   worker.js               consumidor de entrada.comprada
   db.js                   conexión Mongoose
-  lib/                    errores, config, RabbitMQ, outbox, contrato
+  lib/                    errores, config, RabbitMQ, outbox, contrato, token, cuerpo JSON crudo
   middleware/             Auth0 (JWT + scopes), x-api-key
   models/                 Evento, Asistente, Compra, Entrada, EventoProcesado
 services/pagos-mock/      pasarela de pago simulada (Dockerfile propio)
