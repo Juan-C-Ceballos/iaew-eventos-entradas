@@ -29,21 +29,36 @@ async function publicarPendientes({ repositorio = repositorioMongo, publish = pu
   return publicados;
 }
 
-function iniciarRelay({ intervaloMs, ...opciones }) {
+// Una pasada del relay. Un fallo se registra una sola vez y no en cada pasada (con RabbitMQ
+// caído serían miles de líneas iguales): se vuelve a registrar solo si el error cambia, y se
+// avisa cuando la pasada vuelve a completarse sin errores.
+function crearPasada({ log = console, ...opciones } = {}) {
+  let ultimoError = null;
   let enCurso = false;
-  const timer = setInterval(async () => {
+  return async function pasada() {
     if (enCurso) return;
     enCurso = true;
     try {
       const publicados = await publicarPendientes(opciones);
-      if (publicados > 0) console.log(`Outbox: ${publicados} evento(s) entrada.comprada publicados`);
+      if (ultimoError !== null) {
+        log.log('Outbox: la publicación se restableció');
+        ultimoError = null;
+      }
+      if (publicados > 0) log.log(`Outbox: ${publicados} evento(s) entrada.comprada publicados`);
     } catch (error) {
-      console.error('Outbox: publicación pendiente, se reintenta en la próxima pasada:', error.message);
+      if (error.message !== ultimoError) {
+        log.error(`Outbox: publicación pendiente, se reintenta en cada pasada (sin repetir este aviso): ${error.message}`);
+        ultimoError = error.message;
+      }
     } finally {
       enCurso = false;
     }
-  }, intervaloMs);
+  };
+}
+
+function iniciarRelay({ intervaloMs, ...opciones }) {
+  const timer = setInterval(crearPasada(opciones), intervaloMs);
   return () => clearInterval(timer);
 }
 
-module.exports = { publicarPendientes, iniciarRelay };
+module.exports = { publicarPendientes, crearPasada, iniciarRelay };

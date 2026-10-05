@@ -24,6 +24,7 @@ Una forma de cubrirlo es responder 503 a la pasarela para que reintente el webho
 - **Duplicados posibles:** si la API se cae entre publicar y marcar, o si corre más de una réplica de `api`, el mismo `eventId` puede publicarse dos veces. Es aceptable porque la entrega ya es *at least once* y el consumidor deduplica por `eventId` ([ADR 0005](adr-0005-broker-rabbitmq.md)).
 - **Latencia adicional** de hasta `OUTBOX_INTERVALO_MS` entre el pago y la publicación. Para la emisión de entradas es irrelevante.
 - Consultas periódicas a MongoDB, acotadas por el índice y por un límite de 50 compras por pasada.
+- Un fallo del broker se registra **una sola vez** (y otra vez solo si el error cambia), con un aviso cuando la publicación se restablece. Registrarlo en cada pasada llenaría los logs con miles de líneas iguales.
 
 ## Alternativas descartadas
 
