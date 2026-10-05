@@ -4,8 +4,6 @@ npm-debug.log*
 .env.*
 !.env.example
 .git
-.sf
-.sfdx
 .vscode
 .idea
 postman

@@ -65,3 +65,30 @@ test('un cuerpo JSON mal formado responde 400 INVALID_JSON', async () => {
   assert.equal(res.status, 400);
   assertError(await res.json(), 'INVALID_JSON');
 });
+
+test('el middleware de x-api-key valida la clave en tiempo constante', () => {
+  const { requireApiKey } = require('../src/middleware/apiKey');
+  const previa = process.env.INTERNAL_API_KEY;
+  process.env.INTERNAL_API_KEY = 'clave-de-prueba';
+  try {
+    const correr = (clave) => {
+      const res = { statusCode: 200, body: null, status(c) { this.statusCode = c; return this; }, json(b) { this.body = b; return this; } };
+      let siguio = false;
+      requireApiKey({ header: () => clave }, res, () => { siguio = true; });
+      return { res, siguio };
+    };
+    assert.equal(correr('clave-de-prueba').siguio, true);
+    const ausente = correr(undefined);
+    assert.equal(ausente.res.statusCode, 401);
+    assertError(ausente.res.body, 'API_KEY_INVALID');
+    const incorrecta = correr('otra-clave-mas-larga-que-la-esperada');
+    assert.equal(incorrecta.res.statusCode, 401);
+    assertError(incorrecta.res.body, 'API_KEY_INVALID');
+    delete process.env.INTERNAL_API_KEY;
+    const sinConfigurar = correr('x');
+    assert.equal(sinConfigurar.res.statusCode, 500);
+    assertError(sinConfigurar.res.body, 'API_KEY_NOT_CONFIGURED');
+  } finally {
+    if (previa === undefined) delete process.env.INTERNAL_API_KEY; else process.env.INTERNAL_API_KEY = previa;
+  }
+});

@@ -4,6 +4,11 @@ name: iaew-eventos-entradas
 # Las variables se leen del .env del proyecto (si existe) con valores por defecto
 # locales; dentro de la red de Compose los hosts son los nombres de servicio.
 
+# api, worker y db-init comparten la misma imagen (cambia solo el comando).
+x-app-image: &app-image
+  build: .
+  image: iaew-eventos-entradas:local
+
 services:
   mongodb:
     image: mongo:7
@@ -32,7 +37,7 @@ services:
       retries: 20
 
   db-init:
-    build: .
+    <<: *app-image
     command: ["sh", "-c", "npm run migrate && npm run seed"]
     environment:
       MONGODB_URI: mongodb://mongodb:27017/iaew_eventos
@@ -42,7 +47,7 @@ services:
     restart: "no"
 
   api:
-    build: .
+    <<: *app-image
     command: ["node", "src/app.js"]
     restart: unless-stopped
     ports:
@@ -73,7 +78,7 @@ services:
       retries: 10
 
   worker:
-    build: .
+    <<: *app-image
     command: ["node", "src/worker.js"]
     restart: unless-stopped
     environment:

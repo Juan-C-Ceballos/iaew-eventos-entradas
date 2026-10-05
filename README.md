@@ -58,7 +58,7 @@ flowchart LR
 ## 4. Requisitos previos
 
 - Docker Desktop (Docker Engine 24 o posterior, con Compose v2).
-- Node.js 20 o posterior y npm (solo para desarrollo local y tests; el sistema corre completo en Docker).
+- Node.js 22 o posterior y npm (solo para desarrollo local y tests; el sistema corre completo en Docker).
 - Una cuenta gratuita de Auth0, para probar los endpoints protegidos.
 - curl o Postman.
 
