@@ -34,7 +34,7 @@ flowchart LR
 
 | Elemento | Tipo | Responsabilidad | Scopes / credencial |
 |---|---|---|---|
-| Backoffice del organizador | Sistema cliente (M2M) | Alta, modificación, publicación y baja de eventos. En la demo lo representa Postman o `curl` con las credenciales de `iaew-organizador` | `read:eventos`, `write:eventos`, `admin:eventos` |
+| Backoffice del organizador | Sistema cliente (M2M) | Alta, modificación, publicación y baja de eventos | `read:eventos`, `write:eventos`, `admin:eventos` |
 | Canal de venta | Sistema cliente | Ejecuta el flujo de compra en nombre del asistente | `read:eventos`, `buy:entradas` |
 | Control de acceso | Sistema cliente | Consulta y valida entradas en la puerta | `validate:entradas` |
 | Herramienta interna | Script | Lee métricas de ventas | `x-api-key` (comparación, no OAuth) |
