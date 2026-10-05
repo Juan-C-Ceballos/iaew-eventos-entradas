@@ -37,8 +37,8 @@ flowchart LR
   ex -->|"entrada.comprada"| q["emision.entrada-comprada"]
   q -->|"consume, prefetch 1"| worker["worker<br/>(consumidor)"]
   worker -->|"falla transitoria<br/>x-retry-count + 1"| rex{{"entradas.retry.exchange"}}
-  rex --> rq["emision.entrada-comprada.retry<br/>TTL = RETRY_DELAY_MS"]
-  rq -->|"dead-letter al vencer el TTL"| ex
+  rex --> rq["emision.entrada-comprada.retry<br/>espera = expiration del mensaje (RETRY_DELAY_MS)"]
+  rq -->|"dead-letter al vencer la expiración"| ex
   worker -->|"falla permanente o<br/>reintentos agotados (MAX_RETRIES)"| dlx{{"entradas.dlx"}}
   dlx -->|"entrada.comprada.dlq"| dlq["emision.entrada-comprada.dlq"]
 ```
@@ -47,11 +47,13 @@ flowchart LR
 |---|---|---|
 | Exchange principal | `entradas.exchange` | direct, durable |
 | Exchange de reintento | `entradas.retry.exchange` | direct, durable |
-| Cola de reintento | `emision.entrada-comprada.retry` | `x-message-ttl = RETRY_DELAY_MS`, `x-dead-letter-exchange = entradas.exchange`, `x-dead-letter-routing-key = entrada.comprada` |
+| Cola de reintento | `emision.entrada-comprada.retry` | `x-dead-letter-exchange = entradas.exchange`, `x-dead-letter-routing-key = entrada.comprada`. **Sin** `x-message-ttl`: la espera la fija cada mensaje con `expiration = RETRY_DELAY_MS` |
 | Dead letter exchange | `entradas.dlx` | direct, durable |
 | Dead letter queue | `emision.entrada-comprada.dlq` | binding `entrada.comprada.dlq` |
 
-Headers que agrega el worker: `x-retry-count`, `x-last-error` y `x-dlq-reason`. La topología se declara en [`src/lib/rabbit.js`](../../src/lib/rabbit.js). En la Entrega 1 el worker ya la crea al iniciar y se puede ver en la consola de RabbitMQ (http://localhost:15672).
+Headers que agrega el worker: `x-retry-count`, `x-last-error` y `x-dlq-reason`.
+
+**Quién declara la topología.** `api` y `worker` ejecutan la misma `declararTopologia` de [`src/lib/rabbit.js`](../../src/lib/rabbit.js), de forma idempotente y sin argumentos que dependan del entorno. Así un mensaje publicado por la `api` nunca se pierde por una cola todavía inexistente (RabbitMQ descarta sin avisar lo que no tiene cola de destino), y un `RETRY_DELAY_MS` distinto entre servicios no provoca `PRECONDITION_FAILED`: el retraso viaja en cada mensaje (`expiration`) y no en los argumentos de la cola. Con una espera constante, la cola de retry mantiene el orden y no hay bloqueo en la cabeza. En la Entrega 1 el worker ya la crea al iniciar y se puede ver en la consola de RabbitMQ (http://localhost:15672).
 
 ## Notificación de pago (webhook HTTP)
 

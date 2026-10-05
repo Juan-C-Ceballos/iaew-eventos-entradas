@@ -34,7 +34,7 @@ flowchart LR
 | Contenedor | Tecnología | Responsabilidad | Puertos (host) |
 |---|---|---|---|
 | `api` | Node.js 22, Express 4, Mongoose 8, express-oauth2-jwt-bearer, amqplib | Expone el contrato [`openapi.json`](openapi.json) y la documentación en `/api-docs`. Valida JWT (firma, issuer, audience, expiración) y scopes, y `x-api-key` en `/internal`. Aplica `Idempotency-Key`, reserva cupo de forma atómica, verifica la firma HMAC del webhook y publica `entrada.comprada` con el relay del outbox | 3000 |
-| `worker` | Node.js 22, amqplib, Mongoose 8 | Declara la topología. Consume `emision.entrada-comprada`, emite las entradas de forma idempotente y gestiona reintentos y DLQ | — |
+| `worker` | Node.js 22, amqplib, Mongoose 8 | Declara la topología (igual que `api`, de forma idempotente). Consume `emision.entrada-comprada`, emite las entradas de forma idempotente y gestiona reintentos y DLQ | — |
 | `mongodb` | MongoDB 7 | Persistencia de documentos. Garantiza unicidad con índices (ver [modelo de datos](modelo-datos.md)) | 27017 |
 | `rabbitmq` | RabbitMQ 4.2 + management | Desacopla el cobro confirmado de la emisión. Ofrece retry con TTL y DLQ | 5672, 15672 |
 | `db-init` | Misma imagen que `api` | Job de una sola ejecución: `npm run migrate && npm run seed`. `api` arranca recién cuando termina bien | — |

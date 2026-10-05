@@ -158,6 +158,8 @@ npm run worker       # en otra terminal
 
 Detener: `docker compose down`. Borrar también los datos: `docker compose down -v`.
 
+> Si ya habías levantado una versión anterior del repo, corré `docker compose down` antes de `up`: RabbitMQ no usa volumen y conservaría la cola de retry vieja, con argumentos distintos a los actuales.
+
 ## 11. Datos iniciales
 
 El job `db-init` corre `npm run migrate` (índices con migrate-mongo) y `npm run seed` (3 eventos de demostración) antes de que arranque la API. Ambos son idempotentes. Detalle en [docs/modelo-datos.md](docs/modelo-datos.md#estrategia-de-migraciones-y-seed).
