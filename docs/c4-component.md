@@ -88,7 +88,7 @@ sequenceDiagram
   A->>M: compra pendiente → pago_pendiente (condicional, fija pagoExpiraEn)
   A->>P: POST /pagos (compraId, monto, Idempotency-Key)
   alt la pasarela no responde
-    A-->>C: 503 (sigue en pago_pendiente; reintentar con la misma clave)
+    A-->>C: 503 (sigue en pago_pendiente, reintentar con la misma clave)
   else acepta el cobro
     P-->>A: referenciaExterna
     A->>M: guarda pago.referenciaExterna

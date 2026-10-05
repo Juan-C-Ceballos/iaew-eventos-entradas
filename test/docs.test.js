@@ -33,3 +33,18 @@ test('los enlaces relativos de README.md y docs/ apuntan a archivos que existen'
   }
   assert.deepEqual(rotos, []);
 });
+
+test('los diagramas de secuencia de Mermaid no usan ";" en los mensajes', () => {
+  // En sequenceDiagram el ";" separa sentencias (como un salto de línea): un mensaje que lo
+  // contenga corta el parser y GitHub muestra "Unable to render rich display".
+  const problemas = [];
+  for (const archivo of [path.join(raiz, 'README.md'), ...archivosMarkdown(path.join(raiz, 'docs'))]) {
+    const contenido = fs.readFileSync(archivo, 'utf8');
+    for (const [, diagrama] of contenido.matchAll(/```mermaid\n(sequenceDiagram[\s\S]*?)```/g)) {
+      diagrama.split('\n').forEach((linea, i) => {
+        if (linea.includes(';')) problemas.push(`${path.relative(raiz, archivo)} (línea ${i + 1} del diagrama): ${linea.trim()}`);
+      });
+    }
+  }
+  assert.deepEqual(problemas, []);
+});
