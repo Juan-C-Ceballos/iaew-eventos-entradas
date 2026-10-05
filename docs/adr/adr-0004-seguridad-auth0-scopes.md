@@ -30,7 +30,7 @@ Además, el webhook de la pasarela necesita su propia autenticación, porque la 
    | `validate:entradas` | `GET /entradas/{codigo}`, `POST /entradas/{codigo}/validar` |
 
    Clientes M2M de la demo: **organizador** (`read`, `write`, `admin:eventos`), **canal de venta** (`read:eventos`, `buy:entradas`) y **control de acceso** (`validate:entradas`).
-4. **401 vs 403:** 401 `TOKEN_INVALID` cuando falta el token o es inválido o expiró. 403 `SCOPE_REQUIRED` cuando el token es válido pero le falta el scope.
+4. **401 vs 403:** 401 `TOKEN_INVALID` cuando falta el token o es inválido o expiró. 403 `SCOPE_REQUIRED` cuando el token es válido pero le falta el scope. Una cabecera `Authorization` mal formada (esquema distinto de Bearer, o dos credenciales) también es 401: la librería la reporta como 400 `invalid_request`, pero la acción del cliente es la misma. Los 401 incluyen `WWW-Authenticate: Bearer realm="api"`.
 5. **x-api-key** solo en `GET /internal/reportes/ventas`. Se compara con `INTERNAL_API_KEY` y responde 401 `API_KEY_INVALID`. No se combina con OAuth ni se documenta como alternativa al Bearer: sirve para comparar los dos modelos (la clave es estática, no expira, no tiene scopes y no identifica al cliente).
 6. **Webhook:** firma HMAC-SHA256 con secreto compartido y timestamp ([ADR 0006](adr-0006-webhook-pago-hmac.md)).
 7. **Secretos:** solo en `.env` (ignorado por git). `.env.example` tiene nombres y valores ficticios. `AUTH0_CLIENT_SECRET` lo usan solo los clientes para pedir tokens; la API nunca lo necesita.
