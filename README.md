@@ -22,7 +22,7 @@ Un organizador publica eventos con capacidad limitada. Un canal de venta compra 
 
 | Requisito de la consigna | Cómo se cubre |
 |---|---|
-| CRUD de 2 entidades | **Eventos** (CRUD completo) y **Compras** (crear, leer, listar, cancelar) |
+| CRUD de 2 entidades | **Eventos** (CRUD completo) y **Compras** (crear = reservar, leer, actualizar = pagar y eliminar = cancelar, como baja lógica; [ADR 0001](docs/adr/adr-0001-estilo-api-rest.md)) |
 | Transacción multi-paso | Reservar cupo → pagar (pasarela simulada) → confirmar por webhook → emitir entradas |
 | OAuth 2.0 + JWT con scopes | Auth0 `client_credentials` con `read:eventos`, `write:eventos`, `admin:eventos`, `buy:entradas` y `validate:entradas` |
 | Endpoint con `x-api-key` | `GET /internal/reportes/ventas` |
@@ -48,7 +48,7 @@ flowchart LR
 | Documento | Contenido |
 |---|---|
 | [docs/c4-context.md](docs/c4-context.md) | C4 nivel 1: actores y sistemas externos |
-| [docs/c4-container.md](docs/c4-container.md) | C4 nivel 2: contenedores (1:1 con `docker-compose.yml`) |
+| [docs/c4-container.md](docs/c4-container.md) | C4 nivel 2: contenedores (coinciden con `docker-compose.yml`, salvo la tarea de arranque `db-init`) |
 | [docs/c4-component.md](docs/c4-component.md) | C4 nivel 3: componentes de `api` + secuencia del flujo de compra |
 | [docs/openapi.json](docs/openapi.json) | Contrato OpenAPI 3.1 (también en http://localhost:3000/api-docs) |
 | [docs/modelo-datos.md](docs/modelo-datos.md) | Colecciones, índices, máquinas de estado, migraciones y seed |
@@ -58,7 +58,7 @@ flowchart LR
 ## 4. Requisitos previos
 
 - Docker Desktop (Docker Engine 24 o posterior, con Compose v2).
-- Node.js 20 o posterior y npm (solo para desarrollo local y tests; el sistema corre completo en Docker).
+- Node.js 22 o posterior y npm (solo para desarrollo local y tests; el sistema corre completo en Docker).
 - Una cuenta gratuita de Auth0, para probar los endpoints protegidos.
 - curl o Postman.
 
@@ -82,6 +82,9 @@ cp .env.example .env
 | `PAGOS_URL`, `WEBHOOK_URL` | Pasarela simulada y URL del webhook | `http://localhost:4000`, `http://localhost:3000/webhooks/pagos` |
 | `WEBHOOK_SECRET`, `WEBHOOK_TOLERANCIA_SEGUNDOS` | Secreto HMAC compartido y ventana anti-replay | `colocar-secreto-compartido-local`, `300` |
 | `RESERVA_TTL_MINUTOS` | Vencimiento de una reserva sin pagar | `15` |
+| `PAGO_TIMEOUT_MINUTOS` | Cuánto espera un pago pendiente antes de que el barrido lo concilie con la pasarela | `30` |
+| `BARRIDO_INTERVALO_MS` | Cada cuánto corre el barrido del worker (vencimientos, conciliación de pagos, cupo) | `60000` |
+| `EVENTO_FINALIZA_TRAS_HORAS` | Horas después de la fecha del evento en que pasa a `finalizado` | `12` |
 
 `.env` está en `.gitignore`. **Nunca se commitean valores reales.**
 
@@ -98,7 +101,8 @@ cp .env.example .env
    | `iaew-canal-venta` | `read:eventos`, `buy:entradas` |
    | `iaew-control-acceso` | `validate:entradas` |
 
-5. Copiar el **Domain** de la aplicación (por ejemplo `dev-xxxx.us.auth0.com`, sin `https://`) a `AUTH0_DOMAIN`, y su Client ID y Client Secret a `AUTH0_CLIENT_ID` y `AUTH0_CLIENT_SECRET` en `.env`. Después, recrear la API para que tome los valores: `docker compose up -d api`.
+5. **Expiración del token:** en *APIs → IAEW Eventos API → Settings*, poner **Token Expiration (Seconds)** en `3600` (por defecto es `86400`). La API valida `exp` y rechaza un token vencido con 401 `TOKEN_INVALID` ([ADR 0004](docs/adr/adr-0004-seguridad-auth0-scopes.md)).
+6. Copiar el **Domain** de la aplicación (por ejemplo `dev-xxxx.us.auth0.com`, sin `https://`) a `AUTH0_DOMAIN`, y su Client ID y Client Secret a `AUTH0_CLIENT_ID` y `AUTH0_CLIENT_SECRET` en `.env`. Después, recrear la API para que tome los valores: `docker compose up -d api`.
 
 ## 7. Obtener un token (`client_credentials`)
 
@@ -112,12 +116,14 @@ TOKEN=$(curl -s --request POST "https://$AUTH0_DOMAIN/oauth/token" \
 
 ## 8. Probar endpoints protegidos con Bearer
 
-Esto ya funciona en la Entrega 1: `/token-info` muestra `iss`, `aud`, `sub` y los scopes del token.
+Esto ya funciona en la Entrega 1: `/token-info` muestra `iss`, `aud`, `sub`, los scopes y la vigencia del token (`issuedAt`, `expiresAt`, `expiresInSeconds`).
 
 ```bash
 curl -s http://localhost:3000/token-info -H "Authorization: Bearer $TOKEN"
 curl -i http://localhost:3000/token-info                          # 401 TOKEN_INVALID
 ```
+
+Para ver la expiración en acción: bajar *Token Expiration* a `60`, pedir un token, esperar más de un minuto y repetir la llamada. Responde 401 `TOKEN_INVALID`; con un token nuevo vuelve a 200. Restaurar `3600` después. Los clientes deben reutilizar el token hasta que se acerque a `expiresAt` y no pedir uno por request.
 
 **(Entrega 2)** Con el scope correcto, `GET /eventos` responde 200. Sin el scope responde 403 `SCOPE_REQUIRED`.
 
@@ -158,9 +164,11 @@ npm run worker       # en otra terminal
 
 Detener: `docker compose down`. Borrar también los datos: `docker compose down -v`.
 
+> Si ya habías levantado una versión anterior del repo, corré `docker compose down` antes de `up`: RabbitMQ no usa volumen y conservaría la cola de retry vieja, con argumentos distintos a los actuales.
+
 ## 11. Datos iniciales
 
-El job `db-init` corre `npm run migrate` (índices con migrate-mongo) y `npm run seed` (3 eventos de demostración) antes de que arranque la API. Ambos son idempotentes. Detalle en [docs/modelo-datos.md](docs/modelo-datos.md#estrategia-de-migraciones-y-seed).
+El job `db-init` corre `npm run migrate` (índices con migrate-mongo) y `npm run seed` (3 eventos de demostración, con fechas a 45, 52 y 65 días de la primera ejecución para que sigan vendiendo) antes de que arranque la API. Ambos son idempotentes. Detalle en [docs/modelo-datos.md](docs/modelo-datos.md#estrategia-de-migraciones-y-seed).
 
 | Evento | Id | Para probar |
 |---|---|---|
@@ -173,9 +181,9 @@ Para ver el estado de las migraciones: `npm run migrate:status`.
 ## 12. Ejecutar las pruebas
 
 ```bash
-npm test               # node --test: smoke de la API y coherencia del contrato, el evento, el compose y el C4
+npm test               # node --test: smoke de la API, RabbitMQ, outbox, config y token; coherencia del contrato, el evento, el compose, el C4, los índices de las migraciones y los enlaces de la documentación
 npm run check          # sintaxis de los puntos de entrada
-npm run lint:openapi   # valida docs/openapi.json con Redocly
+npm run lint:openapi   # valida docs/openapi.json con Redocly (reglas en redocly.yaml)
 docker compose config --quiet
 ```
 
@@ -214,6 +222,8 @@ Contrato y topología: [docs/eventos/README.md](docs/eventos/README.md).
 - `{"escenario":"rechazado"}`: la compra queda `rechazada` y se libera el cupo (`GET /eventos/{id}`).
 - Firma alterada o timestamp viejo: 401 `WEBHOOK_SIGNATURE_INVALID` / `WEBHOOK_TIMESTAMP_EXPIRED`.
 - Notificación repetida: 200 con `duplicado: true`, sin efectos dobles.
+- Webhook que nunca llega: al vencer `pagoExpiraEn` (`PAGO_TIMEOUT_MINUTOS`), el barrido del worker consulta `GET /pagos?compraId=` a la pasarela y resuelve la compra (`pagada`, `rechazada` o `expirada`). Para provocarlo, apagar `pagos-mock` después de `/pagar` y bajar `PAGO_TIMEOUT_MINUTOS` y `BARRIDO_INTERVALO_MS`.
+- Pasarela caída al pagar: `/pagar` responde 503 y la compra queda en `pago_pendiente`. Reintentar con la misma `Idempotency-Key` vuelve a enviar el cobro.
 
 Diseño: [ADR 0006](docs/adr/adr-0006-webhook-pago-hmac.md).
 
@@ -235,14 +245,15 @@ Diseño: [ADR 0006](docs/adr/adr-0006-webhook-pago-hmac.md).
 | `GET /health` | pública | Estado del servicio |
 | `GET /token-info` | Bearer (cualquier scope) | Diagnóstico del token |
 | `GET /eventos`, `GET /eventos/{id}` | `read:eventos` | Listar y obtener eventos |
-| `POST /eventos`, `PATCH /eventos/{id}` | `write:eventos` | Crear y modificar eventos |
+| `POST /eventos`, `PATCH /eventos/{id}` | `write:eventos` | Crear, modificar y publicar eventos |
+| `POST /eventos/{id}/cancelar` | `write:eventos` | Cancelar un evento: corta ventas y anula entradas |
 | `DELETE /eventos/{id}` | `admin:eventos` | Eliminar un evento sin ventas |
 | `POST /compras` | `buy:entradas` + `Idempotency-Key` | Paso 1: reservar cupo |
 | `POST /compras/{id}/pagar` | `buy:entradas` + `Idempotency-Key` | Paso 2: solicitar el pago (202) |
 | `POST /webhooks/pagos` | firma HMAC | Paso 3: resultado del pago |
 | `GET /compras/{id}/entradas` | `buy:entradas` | Paso 4: entradas emitidas |
-| `GET /compras`, `GET /compras/{id}`, `POST /compras/{id}/cancelar` | `buy:entradas` | Consultar y cancelar compras |
-| `GET /entradas/{codigo}`, `POST /entradas/{codigo}/validar` | `validate:entradas` | Control de acceso |
+| `GET /compras`, `GET /compras/{id}`, `POST /compras/{id}/cancelar` | `buy:entradas` | Consultar y cancelar **las compras propias** (`creadaPor` = `sub` del token; una compra ajena responde 404) |
+| `GET /entradas/{codigo}`, `POST /entradas/{codigo}/validar` | `validate:entradas` | Control de acceso. `validar` recibe `{ "eventoId": "…" }` (el evento de la puerta) |
 | `GET /internal/reportes/ventas` | `x-api-key` | Reporte de ventas |
 
 Ejemplo **(Entrega 2)** del paso 1, con sus ejemplos completos de respuesta en el contrato:
@@ -271,21 +282,28 @@ Stack: **Node.js 22 + Express 4 (CommonJS), MongoDB 7 + Mongoose 8, RabbitMQ 4.2
 | [0007](docs/adr/adr-0007-reserva-cupo-idempotencia.md) | Reserva de cupo atómica + Idempotency-Key |
 | [0008](docs/adr/adr-0008-observabilidad-correlation-id.md) | Correlation ID, logs JSON y métricas (propuesta) |
 | [0009](docs/adr/adr-0009-outbox-entrada-comprada.md) | Patrón outbox para publicar `entrada.comprada` |
+| [0010](docs/adr/adr-0010-ciclo-de-vida-compra-pago-conciliacion.md) | Orden de `/pagar`, timeout de pago con conciliación y reconciliación de cupo |
+| [0011](docs/adr/adr-0011-ciclo-de-vida-evento.md) | Estados del evento, fechas, cierre automático y cancelación con cascada |
+| [0012](docs/adr/adr-0012-titularidad-trazabilidad-validacion.md) | `creadaPor`, idempotencia por cliente, asistente como snapshot y validación por evento |
 
 ## 18. Limitaciones conocidas y mejoras futuras
 
 **Límites deliberados de la Entrega 1:**
 
 - Las operaciones de negocio responden `501 NOT_IMPLEMENTED`.
-- El `worker` declara la topología pero todavía no consume.
+- El `worker` declara la topología pero todavía no consume ni ejecuta el barrido (vencimientos, conciliación de pagos y reconciliación de cupo).
 - `pagos-mock` solo expone `/health`.
 
 **Limitaciones del diseño:**
 
-- Con `client_credentials` no hay usuario final: las compras se asocian al cliente M2M y al asistente informado.
+- Con `client_credentials` no hay usuario final: cada compra guarda `creadaPor` (el `sub` del cliente M2M) y un cliente solo ve las suyas, pero no hay "mis compras" por persona ([ADR 0012](docs/adr/adr-0012-titularidad-trazabilidad-validacion.md)).
+- El asistente se identifica por DNI de 7 u 8 dígitos: no admite pasaportes ni documentos extranjeros. Cada compra conserva una copia (snapshot) de los datos informados.
 - Los listados no tienen paginación.
-- Las reservas abandonadas retienen cupo hasta que vencen (`RESERVA_TTL_MINUTOS`, 15 minutos por defecto).
-- No hay reembolsos: una compra `pagada` no se cancela.
+- Un token revocado en Auth0 sigue valiendo hasta su `exp` (la API valida la firma, no consulta a Auth0 en cada request); por eso el TTL es corto.
+- `mongodb` y `rabbitmq` publican sus puertos en el host: MongoDB sin autenticación y RabbitMQ con credenciales de desarrollo (`iaew` / `iaew-local`). Es una configuración solo para uso local y no debe desplegarse así.
+- Las reservas abandonadas retienen cupo hasta que vencen (`RESERVA_TTL_MINUTOS`, 15 minutos por defecto), y un pago pendiente hasta que llega el resultado o vence `PAGO_TIMEOUT_MINUTOS` (30 minutos).
+- Si la pasarela cobra después de haber respondido "no conozco ese pago", la compra queda `expirada` con `reembolsoPendiente`: no hay reembolso real ([ADR 0010](docs/adr/adr-0010-ciclo-de-vida-compra-pago-conciliacion.md)).
+- No hay reembolsos: una compra `pagada` no se cancela. Si el evento se cancela, la compra queda con `reembolsoPendiente: true` y sus entradas `anuladas` ([ADR 0011](docs/adr/adr-0011-ciclo-de-vida-evento.md)).
 
 **Mejoras futuras:**
 
@@ -311,13 +329,14 @@ docker-compose.yml        api, worker, mongodb, rabbitmq, db-init, pagos-mock
 Dockerfile                imagen de api / worker / db-init
 .env.example              variables de referencia (sin secretos)
 migrate-mongo-config.js   configuración de migraciones
+redocly.yaml              reglas del lint de OpenAPI
 migrations/               migraciones versionadas (índices)
 scripts/seed.js           seed idempotente
 src/
   app.js                  API Express (health, api-docs, token-info, contrato)
   worker.js               consumidor de entrada.comprada
   db.js                   conexión Mongoose
-  lib/                    errores, config, RabbitMQ, outbox, contrato
+  lib/                    errores, config, RabbitMQ, outbox, contrato, token, cuerpo JSON crudo
   middleware/             Auth0 (JWT + scopes), x-api-key
   models/                 Evento, Asistente, Compra, Entrada, EventoProcesado
 services/pagos-mock/      pasarela de pago simulada (Dockerfile propio)

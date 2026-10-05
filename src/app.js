@@ -2,27 +2,24 @@ require('dotenv').config();
 const express = require('express');
 const swaggerUi = require('swagger-ui-express');
 const { connectDb, closeDb } = require('./db');
-const { validateAccessToken } = require('./middleware/auth0');
+const { validateAccessToken, manejarErrorAuth } = require('./middleware/auth0');
 const { sendError } = require('./lib/errors');
 const { openapi, pendingRoutes } = require('./lib/contrato');
-const { integerFromEnv } = require('./lib/config');
+const { integerFromEnv, plazosConfig } = require('./lib/config');
 const { iniciarRelay } = require('./lib/outbox');
+const { describirToken } = require('./lib/token');
+const { jsonBody } = require('./lib/jsonBody');
 const { closeRabbit } = require('./lib/rabbit');
 
 const app = express();
 const port = process.env.PORT || 3000;
 
-app.use(express.json());
+app.use(jsonBody);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 app.get('/api-docs/openapi.json', (req, res) => res.json(openapi));
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openapi));
-app.get('/token-info', validateAccessToken, (req, res) => res.json({
-  issuer: req.auth.payload.iss,
-  audience: req.auth.payload.aud,
-  subject: req.auth.payload.sub,
-  scopes: req.auth.payload.scope
-}));
+app.get('/token-info', validateAccessToken, (req, res) => res.json(describirToken(req.auth.payload)));
 
 // Operaciones del contrato aún no implementadas: responden 501 en vez de 404 para que
 // el esqueleto refleje el contrato completo. Cada router real se monta antes que esto.
@@ -32,18 +29,18 @@ for (const { method, expressPath } of pendingRoutes(['/health', '/token-info']))
 
 app.use((req, res) => sendError(res, 404, 'Ruta inexistente', 'ROUTE_NOT_FOUND', false, 'Consultar el contrato en /api-docs'));
 
+app.use(manejarErrorAuth);
 app.use((err, req, res, next) => {
-  if (err.status === 401) return sendError(res, 401, 'Token ausente, inválido o expirado', 'TOKEN_INVALID', false, 'Obtener y enviar un access token válido');
-  if (err.status === 403) return sendError(res, 403, 'Permisos insuficientes', 'SCOPE_REQUIRED', false, 'Solicitar el scope requerido');
   if (err.type === 'entity.parse.failed') return sendError(res, 400, 'JSON inválido', 'INVALID_JSON', false, 'Corregir el cuerpo JSON');
   return next(err);
 });
 app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
-  console.error('Error no controlado:', err.message);
+  console.error('Error no controlado:', err.message || err.name || err);
   return sendError(res, 500, 'Error interno', 'INTERNAL_ERROR', true, 'Reintentar más tarde');
 });
 
 if (require.main === module) {
+  plazosConfig(); // falla al arrancar si PAGO_TIMEOUT_MINUTOS u otro plazo es inválido
   let detenerRelay = () => {};
   connectDb()
     .then(() => {

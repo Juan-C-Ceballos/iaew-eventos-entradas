@@ -4,6 +4,11 @@ name: iaew-eventos-entradas
 # Las variables se leen del .env del proyecto (si existe) con valores por defecto
 # locales; dentro de la red de Compose los hosts son los nombres de servicio.
 
+# api, worker y db-init comparten la misma imagen (cambia solo el comando).
+x-app-image: &app-image
+  build: .
+  image: iaew-eventos-entradas:local
+
 services:
   mongodb:
     image: mongo:7
@@ -32,7 +37,7 @@ services:
       retries: 20
 
   db-init:
-    build: .
+    <<: *app-image
     command: ["sh", "-c", "npm run migrate && npm run seed"]
     environment:
       MONGODB_URI: mongodb://mongodb:27017/iaew_eventos
@@ -42,7 +47,7 @@ services:
     restart: "no"
 
   api:
-    build: .
+    <<: *app-image
     command: ["node", "src/app.js"]
     restart: unless-stopped
     ports:
@@ -59,6 +64,7 @@ services:
       WEBHOOK_SECRET: ${WEBHOOK_SECRET:-colocar-secreto-compartido-local}
       WEBHOOK_TOLERANCIA_SEGUNDOS: ${WEBHOOK_TOLERANCIA_SEGUNDOS:-300}
       RESERVA_TTL_MINUTOS: ${RESERVA_TTL_MINUTOS:-15}
+      PAGO_TIMEOUT_MINUTOS: ${PAGO_TIMEOUT_MINUTOS:-30}
     depends_on:
       mongodb:
         condition: service_healthy
@@ -73,7 +79,7 @@ services:
       retries: 10
 
   worker:
-    build: .
+    <<: *app-image
     command: ["node", "src/worker.js"]
     restart: unless-stopped
     environment:
@@ -81,6 +87,9 @@ services:
       RABBIT_URL: amqp://${RABBIT_USER:-iaew}:${RABBIT_PASS:-iaew-local}@rabbitmq:5672
       RETRY_DELAY_MS: ${RETRY_DELAY_MS:-3000}
       MAX_RETRIES: ${MAX_RETRIES:-3}
+      PAGOS_URL: http://pagos-mock:4000
+      BARRIDO_INTERVALO_MS: ${BARRIDO_INTERVALO_MS:-60000}
+      EVENTO_FINALIZA_TRAS_HORAS: ${EVENTO_FINALIZA_TRAS_HORAS:-12}
     depends_on:
       mongodb:
         condition: service_healthy

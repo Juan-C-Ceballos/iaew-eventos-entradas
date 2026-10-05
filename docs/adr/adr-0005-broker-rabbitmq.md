@@ -10,7 +10,7 @@ Cuando se aprueba un pago, hay que emitir N entradas con código único, y más 
 ## Decisión
 
 1. **Broker: RabbitMQ 4.2** (imagen `rabbitmq:4.2-management`) con **amqplib**.
-2. **Topología** (detalle en [docs/eventos](../eventos/README.md)): exchange direct `entradas.exchange`, routing key `entrada.comprada`, cola `emision.entrada-comprada`. Retry con `entradas.retry.exchange` y la cola `.retry` (TTL `RETRY_DELAY_MS` que vuelve por dead-letter al exchange principal). DLQ en `entradas.dlx` y la cola `.dlq`.
+2. **Topología** (detalle en [docs/eventos](../eventos/README.md)): exchange direct `entradas.exchange`, routing key `entrada.comprada`, cola `emision.entrada-comprada`. Retry con `entradas.retry.exchange` y la cola `.retry`: el worker publica ahí con `expiration = RETRY_DELAY_MS` por mensaje y, al vencer, vuelve por dead-letter al exchange principal. El retraso va en el mensaje y no en los argumentos de la cola para que la topología sea idéntica en `api` y `worker` (ambos la declaran, de forma idempotente). DLQ en `entradas.dlx` y la cola `.dlq`.
 3. **Productor (`api`):** publica mediante el relay del patrón outbox ([ADR 0009](adr-0009-outbox-entrada-comprada.md)), con confirm channel (`waitForConfirms`), mensajes `persistent` y `messageId = eventId`. El sobre se persiste en `compras.emisionEvento` junto con el cambio a `pagada`, así que un reintento republica siempre el **mismo** `eventId`.
 4. **Consumidor (`worker`):** `prefetch(1)` y ack manual **después** de persistir. Deduplica por `eventos_procesados.eventId` y usa el índice único `(compraId, numero)` en `entradas`. Los errores transitorios van a retry hasta `MAX_RETRIES` y los permanentes (contrato inválido, compra inexistente) van directo a la DLQ. No usa `nack` con requeue.
 5. **Contrato del mensaje:** JSON Schema `entrada.comprada` v1 con `additionalProperties: false` y solo cambios aditivos.
@@ -22,8 +22,12 @@ Cuando se aprueba un pago, hay que emitir N entradas con código único, y más 
 - La entrega *at least once* obliga a que el consumidor sea idempotente, y eso está cubierto con doble barrera.
 - La ventana de inconsistencia entre persistir `pagada` y publicar se elimina con el outbox ([ADR 0009](adr-0009-outbox-entrada-comprada.md)).
 - Hay un contenedor más que operar.
+- La topología no depende del entorno: dos servicios con distinto `RETRY_DELAY_MS` no provocan `PRECONDITION_FAILED`, y declararla también desde la `api` evita perder un mensaje publicado antes de que el worker cree la cola.
 
 ## Alternativas descartadas
+
+- **`x-message-ttl` como argumento de la cola de retry:** obliga a que todos los servicios que la declaran usen el mismo valor, y cambiarlo exige borrar la cola.
+- **Que solo declare el worker:** si la `api` publica antes de que exista la cola, RabbitMQ descarta el mensaje sin error y el outbox lo marcaría como publicado.
 
 - **Kafka:** está pensado para streaming y retención, que no necesitamos. Es más pesado en Compose y no tiene DLQ nativa.
 - **SQS/EventBridge:** requieren AWS y no corren 100% local con Compose sin emuladores.

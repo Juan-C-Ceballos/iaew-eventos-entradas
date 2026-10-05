@@ -18,9 +18,9 @@ Dos errores del dominio son críticos: **evento agotado**, que no puede terminar
    )
    ```
    Si devuelve `null`, se distingue entre inexistente (404), no publicado (409 `EVENT_NOT_PUBLISHED`) y sin cupo (409 `EVENT_SOLD_OUT`) con una lectura posterior.
-2. **Compensación:** si falla la creación de la compra después de reservar, se devuelve el cupo (`$inc: +cantidad`). Las liberaciones (cancelación, rechazo, expiración) también son `$inc` positivos y siempre van atadas a una transición de estado condicional, para no liberar dos veces.
-3. **Vencimiento de la reserva:** `reservaExpiraEn = ahora + RESERVA_TTL_MINUTOS` (configurable por entorno, 15 por defecto). Se fija al crear la compra, así que cambiar la variable no altera las reservas existentes. Se controla de forma perezosa en `/pagar` (vencida → `expirada` + liberación) y con un barrido periódico en el worker sobre el índice `{ estado, reservaExpiraEn }`.
-4. **`Idempotency-Key` obligatoria** en `POST /compras` y `POST /compras/{id}/pagar`: entre 8 y 128 caracteres de `[A-Za-z0-9._:-]`. Se guarda con un índice único y la huella SHA-256 del cuerpo.
+2. **Compensación:** si falla la creación de la compra después de reservar, se devuelve el cupo (`$inc: +cantidad`). Las liberaciones (cancelación, rechazo, expiración) también son `$inc` positivos y siempre van atadas a una transición de estado condicional, para no liberar dos veces. La compensación solo cubre excepciones: si el proceso muere entre los dos pasos, el cupo descontado lo repone el reconciliador del [ADR 0010](adr-0010-ciclo-de-vida-compra-pago-conciliacion.md).
+3. **Vencimiento de la reserva:** `reservaExpiraEn = ahora + RESERVA_TTL_MINUTOS` (configurable por entorno, 15 por defecto). Se fija al crear la compra, así que cambiar la variable no altera las reservas existentes. Se controla de forma perezosa en `/pagar` (vencida → `expirada` + liberación) y con un barrido periódico en el worker sobre el índice `{ estado, reservaExpiraEn }`. El orden de `/pagar`, el vencimiento del pago pendiente y la reconciliación de cupo están en el [ADR 0010](adr-0010-ciclo-de-vida-compra-pago-conciliacion.md).
+4. **`Idempotency-Key` obligatoria** en `POST /compras` y `POST /compras/{id}/pagar`: entre 8 y 128 caracteres de `[A-Za-z0-9._:-]`. Se guarda con un índice único **por cliente** (`{ creadaPor, idempotencyKey }`, [ADR 0012](adr-0012-titularidad-trazabilidad-validacion.md)) y la huella SHA-256 del cuerpo.
    - Misma clave y mismo cuerpo: devuelve el resultado original con `Idempotency-Replayed: true`, sin volver a reservar ni a cobrar.
    - Misma clave con otro cuerpo: 409 `IDEMPOTENCY_KEY_MISMATCH`.
    - Clave ausente o inválida: 400 `IDEMPOTENCY_KEY_REQUIRED` o `IDEMPOTENCY_KEY_INVALID`.
@@ -33,6 +33,7 @@ Dos errores del dominio son críticos: **evento agotado**, que no puede terminar
 - El cupo es un contador desnormalizado: el invariante (capacidad − cupo = reservadas + vendidas) depende de que todas las liberaciones pasen por transiciones condicionales. El reporte de ventas permite auditarlo.
 - Un cliente que pierde la respuesta puede reintentar sin miedo, siempre que conserve la clave.
 - Las reservas abandonadas bloquean cupo hasta que vence `RESERVA_TTL_MINUTOS`. Un valor bajo libera cupo antes, pero deja menos tiempo para pagar.
+- Una compra en `pago_pendiente` retiene cupo hasta que llega el resultado o vence `pagoExpiraEn` ([ADR 0010](adr-0010-ciclo-de-vida-compra-pago-conciliacion.md)).
 
 ## Alternativas descartadas
 

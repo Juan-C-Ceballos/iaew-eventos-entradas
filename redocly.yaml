@@ -1,0 +1,10 @@
+extends:
+  - recommended
+
+rules:
+  # El único servidor es el entorno local de Docker Compose (localhost es intencional).
+  no-server-example.com: off
+  # /health no tiene un caso de error 4xx: responde 200 o directamente no responde.
+  operation-4xx-response: off
+  # EventoEntradaComprada documenta un mensaje de RabbitMQ: ninguna operación HTTP lo referencia.
+  no-unused-components: off

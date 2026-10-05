@@ -1,13 +1,13 @@
 # C4 — Nivel 1: Contexto del sistema de Eventos y Entradas
 
-**Alcance:** el sistema como caja negra, las personas o sistemas que lo usan y las dependencias externas. No muestra detalles internos (ver [Container](c4-container.md)).
+**Alcance:** el sistema como caja negra, los sistemas cliente que lo usan y las dependencias externas. **No hay Personas en este nivel**: con `client_credentials` no existe el usuario final, y quien llama a la API es siempre una aplicación (ver [ADR 0004](adr/adr-0004-seguridad-auth0-scopes.md)). No muestra detalles internos (ver [Container](c4-container.md)).
 
 ```mermaid
 flowchart LR
-  organizador["Organizador de eventos<br/><i>[Persona]</i><br/>Publica y administra eventos"]
+  organizador["Backoffice del organizador<br/><i>[Sistema cliente M2M]</i><br/>Publica y administra eventos"]
   canal["Canal de venta<br/><i>[Sistema cliente M2M]</i><br/>Vende entradas a los asistentes"]
   acceso["Control de acceso<br/><i>[Sistema cliente M2M]</i><br/>Lector de QR en la puerta"]
-  backoffice["Herramienta interna<br/><i>[Script de reportes]</i>"]
+  reportes["Herramienta interna<br/><i>[Script de reportes]</i>"]
 
   sistema["<b>Sistema de Eventos y Entradas</b><br/><i>[Sistema de software]</i><br/>Publica eventos, vende entradas<br/>con reserva de cupo, emite y valida entradas"]
 
@@ -17,7 +17,7 @@ flowchart LR
   organizador -->|"Crea, publica y cancela eventos<br/>HTTPS/JSON + Bearer JWT"| sistema
   canal -->|"Reserva, paga y consulta compras<br/>HTTPS/JSON + Bearer JWT"| sistema
   acceso -->|"Valida entradas en el ingreso<br/>HTTPS/JSON + Bearer JWT"| sistema
-  backoffice -->|"Consulta el reporte de ventas<br/>HTTPS/JSON + x-api-key"| sistema
+  reportes -->|"Consulta el reporte de ventas<br/>HTTPS/JSON + x-api-key"| sistema
 
   organizador -.->|"Obtiene access token<br/>client_credentials"| auth0
   canal -.->|"Obtiene access token<br/>client_credentials"| auth0
@@ -28,11 +28,13 @@ flowchart LR
   pasarela -->|"Notifica pago aprobado o rechazado<br/>Webhook HTTPS + firma HMAC"| sistema
 ```
 
+**Leyenda:** rectángulo = sistema (el sistema propio es el que está en **negrita**; los demás son clientes M2M, la herramienta interna o sistemas externos) · flecha continua = el origen inicia una llamada hacia el destino · **flecha punteada = obtención del token**, previa al uso de la API.
+
 ## Elementos
 
 | Elemento | Tipo | Responsabilidad | Scopes / credencial |
 |---|---|---|---|
-| Organizador de eventos | Persona (vía cliente M2M) | Alta, modificación, publicación y baja de eventos | `read:eventos`, `write:eventos`, `admin:eventos` |
+| Backoffice del organizador | Sistema cliente (M2M) | Alta, modificación, publicación y baja de eventos | `read:eventos`, `write:eventos`, `admin:eventos` |
 | Canal de venta | Sistema cliente | Ejecuta el flujo de compra en nombre del asistente | `read:eventos`, `buy:entradas` |
 | Control de acceso | Sistema cliente | Consulta y valida entradas en la puerta | `validate:entradas` |
 | Herramienta interna | Script | Lee métricas de ventas | `x-api-key` (comparación, no OAuth) |

@@ -15,9 +15,9 @@ La consigna pide una integración adicional entre tres opciones: webhook con fir
    - compara con `crypto.timingSafeEqual`;
    - rechaza un timestamp fuera de ±`WEBHOOK_TOLERANCIA_SEGUNDOS` (300 s) para evitar replays;
    - responde 401 `WEBHOOK_SIGNATURE_INVALID` o `WEBHOOK_TIMESTAMP_EXPIRED`.
-3. **Idempotencia por estado.** La transición `pago_pendiente → pagada|rechazada` es condicional. Una notificación repetida responde 200 con `duplicado: true`, sin efectos. Una notificación contradictoria (por ejemplo, `rechazado` sobre una compra `pagada`) responde 409.
+3. **Idempotencia por estado.** La transición `pago_pendiente → pagada|rechazada` es condicional. Una notificación repetida responde 200 con `duplicado: true`, sin efectos. Una notificación contradictoria (por ejemplo, `rechazado` sobre una compra `pagada`) responde 409. La compra se busca por `data.compraId`, no por `referenciaExterna`: el webhook puede llegar antes de que `/pagar` guarde la referencia ([ADR 0010](adr-0010-ciclo-de-vida-compra-pago-conciliacion.md)).
 4. **El webhook no publica en RabbitMQ.** Persiste el resultado, con el evento a publicar, en una sola escritura, y responde 200. La publicación la hace el relay del outbox ([ADR 0009](adr-0009-outbox-entrada-comprada.md)), así que una caída del broker no afecta a la pasarela.
-5. **Reintentos de la pasarela:** ante 5xx o timeout, `pagos-mock` reintenta con backoff. La API solo responde 503 si MongoDB no está disponible y no pudo persistir el resultado.
+5. **Reintentos de la pasarela:** ante 5xx o timeout, `pagos-mock` reintenta con backoff. La API solo responde 503 si MongoDB no está disponible y no pudo persistir el resultado. Si el webhook nunca llega, no se depende de los reintentos de la pasarela: el barrido del `worker` consulta el estado del pago cuando vence `pagoExpiraEn` ([ADR 0010](adr-0010-ciclo-de-vida-compra-pago-conciliacion.md)).
 6. **Escenario de demo:** el cuerpo de `/pagar` acepta `escenario: aprobado|rechazado` para forzar el resultado. No se envían ni se guardan datos de tarjeta.
 7. **El webhook se protege con la firma HMAC en lugar de OAuth.** Quien llama es un tercero (la pasarela) que no obtiene tokens de nuestro Auth0. Por eso queda fuera del esquema de scopes y se documenta en OpenAPI con un esquema de seguridad propio (`webhookFirma`).
 

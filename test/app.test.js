@@ -65,3 +65,62 @@ test('un cuerpo JSON mal formado responde 400 INVALID_JSON', async () => {
   assert.equal(res.status, 400);
   assertError(await res.json(), 'INVALID_JSON');
 });
+
+test('el middleware de x-api-key valida la clave en tiempo constante', () => {
+  const { requireApiKey } = require('../src/middleware/apiKey');
+  const previa = process.env.INTERNAL_API_KEY;
+  process.env.INTERNAL_API_KEY = 'clave-de-prueba';
+  try {
+    const correr = (clave) => {
+      const res = { statusCode: 200, body: null, status(c) { this.statusCode = c; return this; }, json(b) { this.body = b; return this; } };
+      let siguio = false;
+      requireApiKey({ header: () => clave }, res, () => { siguio = true; });
+      return { res, siguio };
+    };
+    assert.equal(correr('clave-de-prueba').siguio, true);
+    const ausente = correr(undefined);
+    assert.equal(ausente.res.statusCode, 401);
+    assertError(ausente.res.body, 'API_KEY_INVALID');
+    const incorrecta = correr('otra-clave-mas-larga-que-la-esperada');
+    assert.equal(incorrecta.res.statusCode, 401);
+    assertError(incorrecta.res.body, 'API_KEY_INVALID');
+    delete process.env.INTERNAL_API_KEY;
+    const sinConfigurar = correr('x');
+    assert.equal(sinConfigurar.res.statusCode, 500);
+    assertError(sinConfigurar.res.body, 'API_KEY_NOT_CONFIGURED');
+  } finally {
+    if (previa === undefined) delete process.env.INTERNAL_API_KEY; else process.env.INTERNAL_API_KEY = previa;
+  }
+});
+
+test('GET /token-info con una cabecera Authorization mal formada responde 401, no 500', async () => {
+  for (const authorization of ['Basic YWJjOmRlZg==', 'Bearer', 'Token abc', 'Bearer a Bearer b']) {
+    const res = await fetch(`${base}/token-info`, { headers: { Authorization: authorization } });
+    assert.equal(res.status, 401, `Authorization: ${authorization}`);
+    assert.match(res.headers.get('www-authenticate'), /^Bearer/);
+    assertError(await res.json(), 'TOKEN_INVALID');
+  }
+});
+
+test('manejarErrorAuth traduce los errores de la librería: 401 para el token, 403 solo para el scope', () => {
+  const { InvalidRequestError, InvalidTokenError, InsufficientScopeError, UnauthorizedError } = require('express-oauth2-jwt-bearer');
+  const { manejarErrorAuth } = require('../src/middleware/auth0');
+  const correr = (err) => {
+    const res = { statusCode: null, body: null, cabeceras: {}, set(k, v) { this.cabeceras[k] = v; return this; }, status(c) { this.statusCode = c; return this; }, json(b) { this.body = b; return this; } };
+    let siguio = null;
+    manejarErrorAuth(err, {}, res, (e) => { siguio = e; });
+    return { res, siguio };
+  };
+  for (const err of [new UnauthorizedError(), new InvalidRequestError(), new InvalidTokenError('token vencido')]) {
+    const { res } = correr(err);
+    assert.equal(res.statusCode, 401, err.constructor.name);
+    assertError(res.body, 'TOKEN_INVALID');
+  }
+  const sinScope = correr(new InsufficientScopeError(['read:eventos']));
+  assert.equal(sinScope.res.statusCode, 403);
+  assertError(sinScope.res.body, 'SCOPE_REQUIRED');
+  assert.equal(sinScope.res.cabeceras['WWW-Authenticate'], undefined);
+
+  const ajeno = new Error('otra cosa');
+  assert.equal(correr(ajeno).siguio, ajeno, 'un error que no es de autenticación sigue su camino');
+});
