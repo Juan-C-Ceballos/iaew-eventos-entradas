@@ -1,6 +1,6 @@
 {
   "name": "iaew-eventos-entradas",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "description": "Trabajo Práctico Integrador de la cátedra Integración de Aplicaciones en Entornos Web (UTN FRC, 2026) — dominio Eventos y Entradas.",
   "main": "src/app.js",
@@ -18,7 +18,8 @@
     "postman": "newman run postman/iaew-eventos-entradas.postman_collection.json -e postman/pruebas.postman_environment.json",
     "postman:generar": "node postman/generar-coleccion.js",
     "carga": "node carga/ejecutar.js",
-    "carga:generar": "node carga/generar-plan.js"
+    "carga:generar": "node carga/generar-plan.js",
+    "pagos-mock": "node services/pagos-mock/server.js"
   },
   "dependencies": {
     "ajv": "^8.17.1",

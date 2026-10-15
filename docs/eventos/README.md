@@ -53,7 +53,7 @@ flowchart LR
 
 Headers que agrega el worker: `x-retry-count`, `x-last-error` y `x-dlq-reason`.
 
-**Quién declara la topología.** `api` y `worker` ejecutan la misma `declararTopologia` de [`src/lib/rabbit.js`](../../src/lib/rabbit.js), de forma idempotente y sin argumentos que dependan del entorno. Así un mensaje publicado por la `api` nunca se pierde por una cola todavía inexistente (RabbitMQ descarta sin avisar lo que no tiene cola de destino), y un `RETRY_DELAY_MS` distinto entre servicios no provoca `PRECONDITION_FAILED`: el retraso viaja en cada mensaje (`expiration`) y no en los argumentos de la cola. Con una espera constante, la cola de retry mantiene el orden y no hay bloqueo en la cabeza. En la Entrega 1 el worker ya la crea al iniciar y se puede ver en la consola de RabbitMQ (http://localhost:15672).
+**Quién declara la topología.** `api` y `worker` ejecutan la misma `declararTopologia` de [`src/lib/rabbit.js`](../../src/lib/rabbit.js), de forma idempotente y sin argumentos que dependan del entorno. Así un mensaje publicado por la `api` nunca se pierde por una cola todavía inexistente (RabbitMQ descarta sin avisar lo que no tiene cola de destino), y un `RETRY_DELAY_MS` distinto entre servicios no provoca `PRECONDITION_FAILED`: el retraso viaja en cada mensaje (`expiration`) y no en los argumentos de la cola. Con una espera constante, la cola de retry mantiene el orden y no hay bloqueo en la cabeza. El worker la crea al iniciar y se puede ver en la consola de RabbitMQ (http://localhost:15672).
 
 ## Notificación de pago (webhook HTTP)
 
