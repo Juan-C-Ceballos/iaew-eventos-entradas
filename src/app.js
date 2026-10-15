@@ -3,7 +3,8 @@ const express = require('express');
 const swaggerUi = require('swagger-ui-express');
 const { connectDb, closeDb } = require('./db');
 const { validateAccessToken, manejarErrorAuth } = require('./middleware/auth0');
-const { sendError } = require('./lib/errors');
+const { sendError, manejarApiError } = require('./lib/errors');
+const eventosRouter = require('./routes/eventos');
 const { openapi, pendingRoutes } = require('./lib/contrato');
 const { integerFromEnv, plazosConfig } = require('./lib/config');
 const { iniciarRelay } = require('./lib/outbox');
@@ -21,15 +22,20 @@ app.get('/api-docs/openapi.json', (req, res) => res.json(openapi));
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openapi));
 app.get('/token-info', validateAccessToken, (req, res) => res.json(describirToken(req.auth.payload)));
 
+app.use('/eventos', eventosRouter);
+
 // Operaciones del contrato aún no implementadas: responden 501 en vez de 404 para que
-// el esqueleto refleje el contrato completo. Cada router real se monta antes que esto.
-for (const { method, expressPath } of pendingRoutes(['/health', '/token-info'])) {
+// el esqueleto refleje el contrato completo. Cada router real se monta antes que esto y su
+// ruta se agrega a la lista de implementadas.
+const RUTAS_IMPLEMENTADAS = ['/health', '/token-info', '/eventos', '/eventos/{id}', '/eventos/{id}/cancelar'];
+for (const { method, expressPath } of pendingRoutes(RUTAS_IMPLEMENTADAS)) {
   app[method](expressPath, (req, res) => sendError(res, 501, 'Operación documentada en el contrato y pendiente de implementación', 'NOT_IMPLEMENTED', false, 'Disponible en la Entrega 2; ver /api-docs'));
 }
 
 app.use((req, res) => sendError(res, 404, 'Ruta inexistente', 'ROUTE_NOT_FOUND', false, 'Consultar el contrato en /api-docs'));
 
 app.use(manejarErrorAuth);
+app.use(manejarApiError);
 app.use((err, req, res, next) => {
   if (err.type === 'entity.parse.failed') return sendError(res, 400, 'JSON inválido', 'INVALID_JSON', false, 'Corregir el cuerpo JSON');
   return next(err);
