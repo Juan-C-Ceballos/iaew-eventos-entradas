@@ -1,0 +1,10 @@
+# Carga los dashboards JSON de /var/lib/grafana/dashboards (montados desde observabilidad/grafana/dashboards).
+apiVersion: 1
+providers:
+  - name: eventos-entradas
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards

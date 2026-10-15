@@ -1,6 +1,8 @@
 const EntradaModel = require('../models/Entrada');
 const EventoModel = require('../models/Evento');
 const { ApiError } = require('../lib/errors');
+const { logger } = require('../lib/logger');
+const metricas = require('../lib/metricas');
 
 const FORMATO_CODIGO = /^ENT-[A-Z0-9]{12}$/;
 
@@ -27,6 +29,12 @@ async function obtener(codigo, { Entrada = EntradaModel } = {}) {
   return presentarEntrada(await buscar(codigo, Entrada));
 }
 
+// Cada rechazo se cuenta en `validaciones_total{resultado}` (ADR 0008).
+const RESULTADO_POR_CODIGO = {
+  TICKET_NOT_FOUND: 'inexistente', TICKET_WRONG_EVENT: 'otro_evento', EVENT_NOT_ACTIVE: 'evento_inactivo',
+  TICKET_ALREADY_USED: 'ya_usada', TICKET_VOIDED: 'anulada'
+};
+
 // Control de acceso en la puerta (ADR 0012). Orden de las comprobaciones:
 //   1. la entrada existe;                                     → 404 TICKET_NOT_FOUND
 //   2. es del evento de la puerta;                            → 409 TICKET_WRONG_EVENT
@@ -34,7 +42,23 @@ async function obtener(codigo, { Entrada = EntradaModel } = {}) {
 //   4. transición atómica emitida → usada, que registra quién y cuándo la validó.
 // Dos puertas que validan la misma entrada a la vez compiten por el paso 4: gana una sola y la
 // otra recibe 409 TICKET_ALREADY_USED, así que una entrada no entra dos veces.
-async function validar(codigo, { eventoId }, { cliente }, { Entrada = EntradaModel, Evento = EventoModel, ahora = new Date() } = {}) {
+async function validar(codigo, solicitud, identidad, dependencias = {}) {
+  try {
+    const respuesta = await validarEntrada(codigo, solicitud, identidad, dependencias);
+    metricas.validaciones.inc({ resultado: 'acceso_permitido' });
+    logger.info({ entrada: codigo.slice(-4), eventoId: solicitud.eventoId, cliente: identidad.cliente }, 'Acceso permitido');
+    return respuesta;
+  } catch (error) {
+    const resultado = RESULTADO_POR_CODIGO[error.code];
+    if (resultado) {
+      metricas.validaciones.inc({ resultado });
+      logger.warn({ entrada: codigo.slice(-4), eventoId: solicitud.eventoId, cliente: identidad.cliente, resultado }, 'Acceso denegado');
+    }
+    throw error;
+  }
+}
+
+async function validarEntrada(codigo, { eventoId }, { cliente }, { Entrada = EntradaModel, Evento = EventoModel, ahora = new Date() }) {
   const entrada = await buscar(codigo, Entrada);
 
   if (String(entrada.eventoId) !== eventoId.toLowerCase()) {

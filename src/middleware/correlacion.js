@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const { correr } = require('../lib/contexto');
 
 // Correlation ID (ADR 0008): se respeta el X-Correlation-Id de la solicitud si tiene un formato
 // válido; si no, se genera un UUID v4. Se devuelve siempre en la respuesta y viaja a la pasarela,
@@ -9,7 +10,8 @@ function correlacion(req, res, next) {
   const recibido = req.header('X-Correlation-Id');
   req.correlationId = recibido && VALIDO.test(recibido) ? recibido : crypto.randomUUID();
   res.set('X-Correlation-Id', req.correlationId);
-  next();
+  // El resto de la cadena, incluidos los servicios, corre dentro del contexto: sus logs llevan el id.
+  correr({ correlationId: req.correlationId }, next);
 }
 
 module.exports = { correlacion };

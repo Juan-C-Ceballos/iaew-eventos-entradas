@@ -1,4 +1,5 @@
 const amqp = require('amqplib');
+const { logger } = require('./logger');
 
 // Topología documentada en docs/eventos/README.md y ADR 0005.
 const EXCHANGE = 'entradas.exchange';
@@ -45,7 +46,7 @@ async function declararTopologia(activeChannel) {
 async function abrirCanal() {
   const activeConnection = await amqp.connect(rabbitUrl());
   connection = activeConnection;
-  activeConnection.on('error', (error) => console.error('Conexión RabbitMQ falló:', error.message));
+  activeConnection.on('error', (error) => logger.error({ err: error }, 'Conexión RabbitMQ falló'));
   activeConnection.on('close', () => {
     if (connection === activeConnection) { connection = undefined; channelPromise = undefined; }
   });
@@ -53,7 +54,7 @@ async function abrirCanal() {
     const activeChannel = await activeConnection.createConfirmChannel();
     // Sin este listener, un error del canal (por ejemplo una precondición fallida) sería una
     // excepción no capturada y tiraría abajo el proceso.
-    activeChannel.on('error', (error) => console.error('Canal RabbitMQ falló:', error.message));
+    activeChannel.on('error', (error) => logger.error({ err: error }, 'Canal RabbitMQ falló'));
     // Un canal cerrado no se reutiliza: se cierra la conexión y el próximo uso abre una nueva.
     activeChannel.on('close', () => {
       if (connection !== activeConnection) return;

@@ -13,8 +13,8 @@ flowchart LR
     worker["worker<br/><i>[Contenedor: Node.js 22 + amqplib]</i><br/>Consume entrada.comprada y emite entradas"]
     mongodb[("mongodb<br/><i>[Contenedor: MongoDB 7]</i><br/>eventos, asistentes, compras,<br/>entradas, eventos_procesados")]
     rabbitmq[["rabbitmq<br/><i>[Contenedor: RabbitMQ 4.2]</i><br/>entradas.exchange, retry y DLQ"]]
-    prometheus["prometheus<br/><i>[Contenedor planificado: Prometheus]</i><br/>Recolecta las métricas de la api"]
-    grafana["grafana<br/><i>[Contenedor planificado: Grafana]</i><br/>Dashboard de p95, throughput y errores"]
+    prometheus["prometheus<br/><i>[Contenedor: Prometheus 3]</i><br/>Recolecta las métricas de la api y del worker"]
+    grafana["grafana<br/><i>[Contenedor: Grafana 11]</i><br/>Dashboard de p95, throughput y errores"]
   end
 
   clientes -->|"Usa la API<br/>HTTPS/JSON + Bearer JWT"| api
@@ -29,13 +29,11 @@ flowchart LR
   worker -->|"Reintento con TTL o DLQ<br/>AMQP"| rabbitmq
   worker -->|"Consulta pagos vencidos<br/>HTTP/JSON"| pagos
   prometheus -->|"Lee GET /metrics<br/>HTTP"| api
+  prometheus -->|"Lee GET /metrics (puerto 9464)<br/>HTTP"| worker
   grafana -->|"Consulta métricas<br/>PromQL sobre HTTP"| prometheus
-
-  classDef planificado stroke-dasharray: 5 5,stroke:#888,color:#666
-  class prometheus,grafana planificado
 ```
 
-**Leyenda:** rectángulo = contenedor · cilindro = base de datos · rectángulo de doble borde = broker de mensajes · **borde punteado = planificado (Entrega 2)** · flecha punteada = obtención del token, previa al uso de la API. Las flechas apuntan hacia quien **recibe** la llamada.
+**Leyenda:** rectángulo = contenedor · cilindro = base de datos · rectángulo de doble borde = broker de mensajes · flecha punteada = obtención del token, previa al uso de la API. Las flechas apuntan hacia quien **recibe** la llamada.
 
 ## Responsabilidades
 
@@ -46,6 +44,8 @@ flowchart LR
 | `mongodb` | MongoDB 7 | Persistencia de documentos. Garantiza unicidad con índices (ver [modelo de datos](modelo-datos.md)) | 27017 |
 | `rabbitmq` | RabbitMQ 4.2 + management | Desacopla el cobro confirmado de la emisión. Ofrece retry con TTL y DLQ | 5672, 15672 |
 | `pagos-mock` | Node.js 22 (sin dependencias) | Simula la pasarela externa: recibe el cobro y notifica el resultado por webhook firmado | 4000 |
+| `prometheus` | Prometheus 3 | Lee `GET /metrics` de la `api` y del `worker` cada 5 segundos y guarda las series para consultar p95, throughput y error rate ([ADR 0008](adr/adr-0008-observabilidad-correlation-id.md)) | 9090 |
+| `grafana` | Grafana 11 | Dashboard provisionado desde `observabilidad/` que consulta a Prometheus: latencia p95, throughput, error rate y métricas de negocio y del worker | 3001 |
 
 ## Tareas de arranque (no son contenedores C4)
 
@@ -55,14 +55,6 @@ Una tarea de arranque corre una vez, hace su trabajo y termina. No queda despleg
 |---|---|---|
 | `db-init` | `db-init` | Misma imagen que `api`. Ejecuta `npm run migrate && npm run seed` contra `mongodb` (índices y datos de demostración) y termina. `api` arranca recién cuando termina bien |
 
-## Contenedores planificados (Entrega 2)
-
-Todavía no existen en `docker-compose.yml`. Se dibujan con borde punteado en el diagrama. El [ADR 0008](adr/adr-0008-observabilidad-correlation-id.md) que los propone está en estado *propuesta*.
-
-| Contenedor | Tecnología | Responsabilidad |
-|---|---|---|
-| `prometheus` | Prometheus | Lee `GET /metrics` de la `api` y guarda las series para consultar p95, throughput y error rate |
-| `grafana` | Grafana | Dashboard provisionado desde el repo que consulta a Prometheus |
 
 ## Decisiones relacionadas
 
@@ -73,5 +65,5 @@ Todavía no existen en `docker-compose.yml`. Se dibujan con borde punteado en el
 - Webhook de pago: [ADR 0006](adr/adr-0006-webhook-pago-hmac.md)
 - Outbox: [ADR 0009](adr/adr-0009-outbox-entrada-comprada.md)
 - Ciclo de vida de la compra, conciliación de pagos y reconciliación de cupo: [ADR 0010](adr/adr-0010-ciclo-de-vida-compra-pago-conciliacion.md)
+- Observabilidad (correlation id, logs JSON y métricas): [ADR 0008](adr/adr-0008-observabilidad-correlation-id.md)
 
-**Evolución (Entrega 2):** `prometheus` y `grafana` pasan de planificados a contenedores reales ([ADR 0008](adr/adr-0008-observabilidad-correlation-id.md)); cuando se agreguen al Compose, se mueven a la tabla de responsabilidades.

@@ -6,6 +6,7 @@ const { ApiError, errorDeValidacion } = require('../lib/errors');
 const { huella, claveReutilizada } = require('../lib/idempotencia');
 const { plazosConfig } = require('../lib/config');
 const { OBJECT_ID } = require('../lib/http');
+const { logger } = require('../lib/logger');
 
 const { ESTADOS_COMPRA } = CompraModel;
 const CLAVE_DUPLICADA = 11000;
@@ -124,7 +125,7 @@ async function reservar(datos, { clave, cliente }, dependencias = {}) {
     return { compra: creada.toObject(), replayed: false };
   } catch (error) {
     // Si la devolución también falla, se conserva el error original y el reconciliador repone el cupo.
-    await devolverCupo().catch((falla) => console.error(`No se pudo devolver el cupo del evento ${evento._id}: ${falla.message}`));
+    await devolverCupo().catch((falla) => logger.error({ eventoId: String(evento._id), err: falla }, 'No se pudo devolver el cupo del evento'));
     if (error.code === CLAVE_DUPLICADA) {
       // Otro request con la misma clave ganó la carrera: se devuelve su compra.
       const ganadora = await repeticion();

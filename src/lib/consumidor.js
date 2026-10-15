@@ -1,6 +1,9 @@
 const Ajv2020 = require('ajv/dist/2020');
 const addFormats = require('ajv-formats');
 const rabbit = require('./rabbit');
+const { comoConsola } = require('./logger');
+const metricas = require('./metricas');
+const { correr } = require('./contexto');
 const esquema = require('../../docs/eventos/entrada-comprada.schema.json');
 
 const ajv = new Ajv2020({ allErrors: true, strict: true });
@@ -26,23 +29,26 @@ class ErrorPermanente extends Error {
 // confirma (se perdería) y se llama a `alFallarEnrutamiento`: el worker sale y, al cerrarse el
 // canal, RabbitMQ devuelve el mensaje a la cola.
 function crearManejador({
-  procesar, maxRetries, retryDelayMs, log = console, alFallarEnrutamiento = () => {},
+  procesar, maxRetries, retryDelayMs, log = comoConsola(), alFallarEnrutamiento = () => {},
   broker = { publicarReintento: rabbit.publicarReintento, publicarEnDlq: rabbit.publicarEnDlq }
 }) {
-  async function derivarADlq(canal, msg, reason, error) {
+  async function derivarADlq(canal, msg, reason, error, contexto = {}) {
     await broker.publicarEnDlq(canal, msg, { reason, error });
     canal.ack(msg);
-    log.error(`Mensaje a la DLQ (${reason}): ${error?.message ?? error} messageId=${msg.properties.messageId}`);
+    metricas.mensajes.inc({ resultado: 'dlq' });
+    metricas.mensajesDlq.inc({ razon: reason });
+    log.error(`Mensaje a la DLQ (${reason}): ${error?.message ?? error}`, { messageId: msg.properties.messageId, razon: reason, ...contexto });
   }
 
-  async function reintentarOAgotar(canal, msg, error) {
+  async function reintentarOAgotar(canal, msg, error, contexto) {
     if (rabbit.intentosDe(msg) < maxRetries) {
       const intento = await broker.publicarReintento(canal, msg, { retryDelayMs, error });
       canal.ack(msg);
-      log.warn?.(`Reintento ${intento}/${maxRetries} en ${retryDelayMs} ms: ${error.message} messageId=${msg.properties.messageId}`);
+      metricas.mensajes.inc({ resultado: 'reintento' });
+      log.warn(`Reintento ${intento}/${maxRetries} en ${retryDelayMs} ms: ${error.message}`, { messageId: msg.properties.messageId, intento, ...contexto });
       return;
     }
-    await derivarADlq(canal, msg, 'max_retries_exceeded', error);
+    await derivarADlq(canal, msg, 'max_retries_exceeded', error, contexto);
   }
 
   return async function manejar(canal, msg) {
@@ -54,17 +60,20 @@ function crearManejador({
         return await derivarADlq(canal, msg, 'invalid_json', error);
       }
       if (!validarEntradaComprada(evento)) {
-        return await derivarADlq(canal, msg, 'contract_invalid', new Error(ajv.errorsText(validarEntradaComprada.errors)));
+        return await derivarADlq(canal, msg, 'contract_invalid', new Error(ajv.errorsText(validarEntradaComprada.errors)), { correlationId: evento?.correlationId });
       }
 
+      const contexto = { correlationId: evento.correlationId, eventId: evento.eventId };
       try {
-        const resultado = await procesar(evento);
+        // El correlation id del evento (el de la solicitud que originó el pago) acompaña todos los logs del procesamiento.
+        const resultado = await correr(contexto, () => procesar(evento));
         canal.ack(msg);
-        log.log(`entrada.comprada procesado (${resultado?.resultado ?? 'ok'}) eventId=${evento.eventId} correlationId=${evento.correlationId}`);
+        metricas.mensajes.inc({ resultado: resultado?.resultado === 'duplicado' ? 'duplicado' : 'ok' });
+        log.log(`entrada.comprada procesado (${resultado?.resultado ?? 'ok'})`, contexto);
         return undefined;
       } catch (error) {
-        if (error instanceof ErrorPermanente) return await derivarADlq(canal, msg, error.razon, error);
-        return await reintentarOAgotar(canal, msg, error);
+        if (error instanceof ErrorPermanente) return await derivarADlq(canal, msg, error.razon, error, contexto);
+        return await reintentarOAgotar(canal, msg, error, contexto);
       }
     } catch (falla) {
       // No se pudo confirmar ni derivar: el mensaje queda sin ack para que vuelva a la cola.

@@ -4,6 +4,8 @@ const EntradaModel = require('../models/Entrada');
 const EventoProcesadoModel = require('../models/EventoProcesado');
 const { generarCodigoEntrada } = require('../lib/codigoEntrada');
 const { ErrorPermanente } = require('../lib/consumidor');
+const { logger } = require('../lib/logger');
+const metricas = require('../lib/metricas');
 
 const CLAVE_DUPLICADA = 11000;
 const MAX_CODIGOS = 5;
@@ -66,7 +68,12 @@ async function emitirEntradasDeCompra(evento, dependencias = {}) {
     }, ahora);
   }
 
-  await Compra.updateOne({ _id: compra._id, emisionEstado: { $ne: 'emitida' } }, { $set: { emisionEstado: 'emitida', emitidaEn: ahora } });
+  // Solo la primera vez que la compra pasa a emitida cuenta: un mensaje repetido no suma entradas.
+  const marca = await Compra.updateOne({ _id: compra._id, emisionEstado: { $ne: 'emitida' } }, { $set: { emisionEstado: 'emitida', emitidaEn: ahora } });
+  if (marca?.modifiedCount === 1) {
+    metricas.entradasEmitidas.inc(compra.cantidad);
+    logger.info({ compraId: String(compra._id), cantidad: compra.cantidad, estado }, 'Entradas emitidas');
+  }
 
   try {
     await EventoProcesado.create({ eventId: evento.eventId, type: evento.type, compraId: compra._id });

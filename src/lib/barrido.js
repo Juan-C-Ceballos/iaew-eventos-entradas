@@ -3,6 +3,9 @@ const CompraModel = require('../models/Compra');
 const EventoModel = require('../models/Evento');
 const { consultarPago } = require('./pasarela');
 const { plazosConfig } = require('./config');
+const { comoConsola } = require('./logger');
+const metricas = require('./metricas');
+const { correr } = require('./contexto');
 const { expirarReserva } = require('../services/compras');
 const pagos = require('../services/pagos');
 const { cancelarEventoCascada } = require('../services/eventos');
@@ -29,7 +32,7 @@ async function expirarReservasVencidas({ Compra = CompraModel, ahora = new Date(
 // 2. Pagos pendientes cuyo plazo venció: se le pregunta a la pasarela, que es la única fuente de
 // verdad, y se resuelve la compra por el mismo camino que el webhook.
 //   aprobado → pagada | rechazado → rechazada | no la conoce → expirada | pendiente o sin respuesta → se deja.
-async function conciliarPagosVencidos({ Compra = CompraModel, ahora = new Date(), limite = 50, consultar = consultarPago, log = console, ...dependencias } = {}) {
+async function conciliarPagosVencidos({ Compra = CompraModel, ahora = new Date(), limite = 50, consultar = consultarPago, log = comoConsola(), ...dependencias } = {}) {
   const vencidos = await Compra.find({ estado: 'pago_pendiente', pagoExpiraEn: { $lte: ahora } })
     .sort({ pagoExpiraEn: 1 }).limit(limite).select('_id').lean();
   const resumen = { pagadas: 0, rechazadas: 0, expiradas: 0, pendientes: 0, sinRespuesta: 0 };
@@ -85,7 +88,7 @@ async function retomarCascadasDeCancelacion({ Evento = EventoModel, limite = 50,
 // produce una diferencia de milisegundos, no de minutos: por eso solo se corrige una diferencia
 // que se repite idéntica en dos barridos consecutivos (`observadas` guarda la del anterior), con un
 // update condicionado al valor observado para no pisar a una reserva que llegue justo en ese momento.
-async function reconciliarCupo({ Evento = EventoModel, Compra = CompraModel, observadas = new Map(), log = console } = {}) {
+async function reconciliarCupo({ Evento = EventoModel, Compra = CompraModel, observadas = new Map(), log = comoConsola() } = {}) {
   const publicados = await Evento.find({ estado: 'publicado' }).select('capacidad cupoDisponible').lean();
   const ocupados = new Map((await Compra.aggregate([
     { $match: { eventoId: { $in: publicados.map((e) => e._id) }, estado: { $in: ESTADOS_QUE_OCUPAN_CUPO } } },
@@ -131,16 +134,29 @@ function huboCambios(resultado) {
   return Object.entries(resultado).some(([clave, valor]) => typeof valor === 'number' && valor > 0 && !NO_SON_CAMBIOS.includes(clave));
 }
 
+// Suma al contador de acciones lo que cambió cada paso (`barrido_acciones_total{accion}`).
+function contarAcciones({ reservasExpiradas, pagos, eventosFinalizados, cancelacionesCompletadas, cupo }) {
+  const sumar = (accion, cantidad) => { if (typeof cantidad === 'number' && cantidad > 0) metricas.barrido.inc({ accion }, cantidad); };
+  sumar('reservas_expiradas', reservasExpiradas);
+  sumar('pagos_conciliados_pagados', pagos?.pagadas);
+  sumar('pagos_conciliados_rechazados', pagos?.rechazadas);
+  sumar('pagos_conciliados_expirados', pagos?.expiradas);
+  sumar('eventos_finalizados', eventosFinalizados);
+  sumar('cancelaciones_completadas', cancelacionesCompletadas);
+  sumar('cupo_corregido', cupo?.corregidos);
+}
+
 // Arma una pasada del barrido. Ejecuta los pasos en orden; un paso que falla se registra y no
 // impide a los demás (por ejemplo, la pasarela caída no debe frenar el vencimiento de reservas).
 // No es re-entrante: si una pasada tarda más que el intervalo, la siguiente se omite.
-function crearBarrido({ log = console, ...dependencias } = {}) {
+function crearBarrido({ log = comoConsola(), ...dependencias } = {}) {
   const observadas = new Map();
   let enCurso = null;
 
   async function pasada() {
     if (enCurso) return enCurso;
-    enCurso = (async () => {
+    // Cada pasada tiene su propio correlation id para seguir lo que hizo en los logs.
+    enCurso = correr({ correlationId: `barrido-${crypto.randomUUID()}` }, async () => {
       const ahora = dependencias.ahora ?? new Date();
       const base = { ...dependencias, ahora, log };
       const resultados = {};
@@ -156,12 +172,14 @@ function crearBarrido({ log = console, ...dependencias } = {}) {
           resultados[nombre] = await paso();
         } catch (error) {
           resultados[nombre] = { error: error.message };
-          log.error(`Barrido: falló el paso ${nombre}: ${error.message}`);
+          metricas.barridoErrores.inc({ paso: nombre });
+          log.error(`Barrido: falló el paso ${nombre}: ${error.message}`, { paso: nombre });
         }
       }
-      if (Object.values(resultados).some(huboCambios)) log.log(`Barrido: ${JSON.stringify(resultados)}`);
+      contarAcciones(resultados);
+      if (Object.values(resultados).some(huboCambios)) log.log('Barrido: hubo correcciones', { resultados });
       return resultados;
-    })().finally(() => { enCurso = null; });
+    }).finally(() => { enCurso = null; });
     return enCurso;
   }
 

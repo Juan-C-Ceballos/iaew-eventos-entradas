@@ -10,6 +10,9 @@ const entradasRouter = require('./routes/entradas');
 const webhooksRouter = require('./routes/webhooks');
 const internalRouter = require('./routes/internal');
 const { correlacion } = require('./middleware/correlacion');
+const { medirSolicitudes, registrarSolicitudes, montar: montarRouter } = require('./middleware/observabilidad');
+const { logger } = require('./lib/logger');
+const metricas = require('./lib/metricas');
 const { openapi } = require('./lib/contrato');
 const { integerFromEnv, plazosConfig } = require('./lib/config');
 const { iniciarRelay } = require('./lib/outbox');
@@ -21,19 +24,28 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 app.use(correlacion);
+app.use(registrarSolicitudes);
+app.use(medirSolicitudes);
 app.use(jsonBody);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
+// Métricas para Prometheus (ADR 0008). No está en el contrato OpenAPI: es una vista operativa que no se
+// autentica porque la consulta Prometheus dentro de la red de Compose; hay que restringirla fuera del uso local.
+app.get('/metrics', async (req, res) => {
+  res.set('Content-Type', metricas.registro.contentType);
+  res.end(await metricas.registro.metrics());
+});
 app.get('/api-docs/openapi.json', (req, res) => res.json(openapi));
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openapi));
 app.get('/token-info', validateAccessToken, (req, res) => res.json(describirToken(req.auth.payload)));
 
 // Cada operación de docs/openapi.json tiene su ruta; test/contrato-rutas.test.js lo verifica.
-app.use('/eventos', eventosRouter);
-app.use('/compras', comprasRouter);
-app.use('/entradas', entradasRouter);
-app.use('/webhooks', webhooksRouter);
-app.use('/internal', internalRouter);
+// `montarRouter` recuerda el prefijo para etiquetar las métricas con la plantilla de la ruta (observabilidad.js).
+montarRouter(app, '/eventos', eventosRouter);
+montarRouter(app, '/compras', comprasRouter);
+montarRouter(app, '/entradas', entradasRouter);
+montarRouter(app, '/webhooks', webhooksRouter);
+montarRouter(app, '/internal', internalRouter);
 
 app.use((req, res) => sendError(res, 404, 'Ruta inexistente', 'ROUTE_NOT_FOUND', false, 'Consultar el contrato en /api-docs'));
 
@@ -45,7 +57,7 @@ app.use((err, req, res, next) => {
   return next(err);
 });
 app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
-  console.error('Error no controlado:', err.message || err.name || err);
+  logger.error({ err }, 'Error no controlado');
   return sendError(res, 500, 'Error interno', 'INTERNAL_ERROR', true, 'Reintentar más tarde');
 });
 
@@ -55,9 +67,9 @@ if (require.main === module) {
   connectDb()
     .then(() => {
       detenerRelay = iniciarRelay({ intervaloMs: integerFromEnv('OUTBOX_INTERVALO_MS', 1000, { min: 100, max: 60000 }) });
-      app.listen(port, () => console.log(`API escuchando en http://localhost:${port}`));
+      app.listen(port, () => logger.info({ port }, 'API escuchando'));
     })
-    .catch((error) => { console.error('No se pudo conectar a MongoDB:', error.message); process.exit(1); });
+    .catch((error) => { logger.error({ err: error }, 'No se pudo conectar a MongoDB'); process.exit(1); });
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.on(signal, async () => {
       detenerRelay();

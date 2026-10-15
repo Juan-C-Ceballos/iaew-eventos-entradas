@@ -1,11 +1,16 @@
 const { ApiError } = require('./errors');
+const { logger } = require('./logger');
+const metricas = require('./metricas');
 
 const TIMEOUT_MS = 5000;
 
-const pasarelaCaida = () => new ApiError({
-  status: 503, error: 'La pasarela de pago no responde', code: 'PAYMENT_PROVIDER_UNAVAILABLE',
-  action: 'Reintentar la misma solicitud', retryable: true
-});
+const pasarelaCaida = () => {
+  metricas.pagosFallidos.inc({ motivo: 'pasarela_no_disponible' });
+  return new ApiError({
+    status: 503, error: 'La pasarela de pago no responde', code: 'PAYMENT_PROVIDER_UNAVAILABLE',
+    action: 'Reintentar la misma solicitud', retryable: true
+  });
+};
 
 // Cliente HTTP de la pasarela (pagos-mock). Un timeout o un error de red es ambiguo: la pasarela
 // pudo haber aceptado el cobro y perder la respuesta (ADR 0010). Por eso todo fallo, sea de red,
@@ -21,16 +26,16 @@ async function solicitarCobro({ compraId, monto, escenario, correlationId }, { b
       signal: AbortSignal.timeout(timeoutMs)
     });
   } catch (error) {
-    console.error(`Pasarela: no se pudo solicitar el cobro de la compra ${compraId}: ${error.message}`);
+    logger.error({ compraId: String(compraId), err: error }, 'Pasarela: no se pudo solicitar el cobro');
     throw pasarelaCaida();
   }
   if (res.status !== 200 && res.status !== 201) {
-    console.error(`Pasarela: respondió ${res.status} al cobro de la compra ${compraId}`);
+    logger.error({ compraId: String(compraId), statusCode: res.status }, 'Pasarela: respuesta inesperada al solicitar el cobro');
     throw pasarelaCaida();
   }
   const cuerpo = await res.json().catch(() => null);
   if (!cuerpo || typeof cuerpo.referenciaExterna !== 'string') {
-    console.error(`Pasarela: respuesta sin referenciaExterna para la compra ${compraId}`);
+    logger.error({ compraId: String(compraId) }, 'Pasarela: respuesta sin referenciaExterna');
     throw pasarelaCaida();
   }
   return { referenciaExterna: cuerpo.referenciaExterna };

@@ -4,7 +4,12 @@ const barrido = require('../src/lib/barrido');
 
 const AHORA = new Date('2026-11-01T12:00:00.000Z');
 const consulta = (valor) => ({ sort: () => consulta(valor), limit: () => consulta(valor), select: () => consulta(valor), lean: async () => valor });
-const sinLog = () => ({ lines: [], log(m) { this.lines.push(`log:${m}`); }, error(m) { this.lines.push(`error:${m}`); } });
+const sinLog = () => ({
+  lines: [],
+  log(m, campos) { this.lines.push(`log:${m}${campos ? ` ${JSON.stringify(campos)}` : ''}`); },
+  warn(m) { this.lines.push(`warn:${m}`); },
+  error(m) { this.lines.push(`error:${m}`); }
+});
 
 // Modelos vacíos: no hay nada que hacer. Anota cuántas veces se consulta cada colección.
 function modelosVacios() {

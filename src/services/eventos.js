@@ -2,6 +2,7 @@ const EventoModel = require('../models/Evento');
 const CompraModel = require('../models/Compra');
 const EntradaModel = require('../models/Entrada');
 const { ApiError, errorDeValidacion } = require('../lib/errors');
+const { logger } = require('../lib/logger');
 
 const { ESTADOS_EVENTO } = EventoModel;
 const MAX_INTENTOS = 3;
@@ -178,7 +179,7 @@ async function cancelar(id, dependencias = {}) {
   try {
     await cancelarEventoCascada(evento._id, dependencias);
   } catch (error) {
-    console.error(`Cascada de cancelación pendiente para el evento ${evento._id}: ${error.message}`);
+    logger.error({ eventoId: String(evento._id), err: error }, 'Cascada de cancelación pendiente: la retoma el barrido');
   }
   return presentar(await Evento.findById(id).lean());
 }

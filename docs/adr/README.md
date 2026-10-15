@@ -11,7 +11,7 @@ Formato liviano (Michael Nygard): Estado, Fecha, Contexto, Decisión, Consecuenc
 | [0005](adr-0005-broker-rabbitmq.md) | RabbitMQ para `entrada.comprada`, con at-least-once, retry con TTL, DLQ y deduplicación | aceptada |
 | [0006](adr-0006-webhook-pago-hmac.md) | Integración adicional: webhook de pago firmado con HMAC-SHA256 | aceptada |
 | [0007](adr-0007-reserva-cupo-idempotencia.md) | Reserva de cupo con update atómico condicional, más Idempotency-Key | aceptada |
-| [0008](adr-0008-observabilidad-correlation-id.md) | Correlation ID, logs JSON y métricas para el dashboard | propuesta |
+| [0008](adr-0008-observabilidad-correlation-id.md) | Correlation ID, logs JSON y métricas para el dashboard | aceptada |
 | [0009](adr-0009-outbox-entrada-comprada.md) | Patrón outbox para publicar `entrada.comprada` | aceptada |
 | [0010](adr-0010-ciclo-de-vida-compra-pago-conciliacion.md) | Orden de `/pagar`, timeout de pago con conciliación contra la pasarela y reconciliación de cupo | aceptada |
 | [0011](adr-0011-ciclo-de-vida-evento.md) | Estados del evento, fechas, cierre automático y cancelación con cascada | aceptada |

@@ -3,6 +3,8 @@ const CompraModel = require('../models/Compra');
 const EventoModel = require('../models/Evento');
 const { ApiError } = require('../lib/errors');
 const { plazosConfig } = require('../lib/config');
+const { logger } = require('../lib/logger');
+const metricas = require('../lib/metricas');
 const { solicitarCobro } = require('../lib/pasarela');
 const { expirarReserva, presentarCompra, deCliente, compraNoEncontrada } = require('./compras');
 
@@ -114,14 +116,18 @@ async function registrarPagoAprobado(compraId, { referenciaExterna, correlationI
   if (evento?.estado === 'cancelado') set.reembolsoPendiente = true;
 
   const pagada = await Compra.findOneAndUpdate({ _id: compra._id, estado: 'pago_pendiente' }, { $set: set }, { new: true }).lean();
-  if (pagada) return { resultado: 'aplicado', compra: pagada };
+  if (pagada) {
+    metricas.entradasVendidas.inc(pagada.cantidad);
+    logger.info({ compraId: String(pagada._id), cantidad: pagada.cantidad }, 'Pago aprobado: compra pagada');
+    return { resultado: 'aplicado', compra: pagada };
+  }
 
   const actual = await Compra.findById(compra._id).lean();
   if (actual.estado === 'pagada') return { resultado: 'duplicado', compra: actual };
   if (RESUELTAS_SIN_PAGO.includes(actual.estado)) {
     // Cobrado sin entrada: el único caso residual del ADR 0010. No hay reembolso real, solo la marca.
     await Compra.updateOne({ _id: compra._id, estado: actual.estado, reembolsoPendiente: { $ne: true } }, { $set: { reembolsoPendiente: true } });
-    console.error(`Pago aprobado sobre la compra ${compra._id} en estado ${actual.estado}: cobrado sin entrada, queda reembolsoPendiente`);
+    logger.error({ compraId: String(compra._id), estado: actual.estado }, 'Pago aprobado sobre una compra ya resuelta: cobrado sin entrada, queda reembolsoPendiente');
   }
   return { resultado: 'conflicto', compra: actual };
 }
@@ -137,6 +143,8 @@ async function registrarPagoRechazado(compraId, { referenciaExterna, motivo }, d
   const rechazada = await Compra.findOneAndUpdate({ _id: compra._id, estado: 'pago_pendiente' }, { $set: set }, { new: true }).lean();
   if (rechazada) {
     await Evento.updateOne({ _id: rechazada.eventoId }, { $inc: { cupoDisponible: rechazada.cantidad } });
+    metricas.pagosFallidos.inc({ motivo: 'rechazado' });
+    logger.warn({ compraId: String(rechazada._id), motivo }, 'Pago rechazado: compra rechazada y cupo liberado');
     return { resultado: 'aplicado', compra: rechazada };
   }
 
@@ -173,6 +181,8 @@ async function expirarPagoSinRegistro(compraId, dependencias = {}) {
   ).lean();
   if (!expirada) return false;
   await Evento.updateOne({ _id: expirada.eventoId }, { $inc: { cupoDisponible: expirada.cantidad } });
+  metricas.pagosFallidos.inc({ motivo: 'expirado' });
+  logger.warn({ compraId: String(expirada._id) }, 'Pago expirado: la pasarela no lo conoce, compra expirada y cupo liberado');
   return true;
 }
 

@@ -1,5 +1,8 @@
+const { logger } = require('./logger');
+
 function sendError(res, status, error, code, retryable, action, details) {
   const body = { error, code, retryable, action };
+  if (res.locals) res.locals.errorCode = code; // lo registra el log de la solicitud
   if (details !== undefined) body.details = details;
   return res.status(status).json(body);
 }
@@ -31,7 +34,7 @@ const esBaseNoDisponible = (err) => ERRORES_DE_BASE.includes(err?.name) || /buff
 
 function manejarErrorDeBase(err, req, res, next) {
   if (!esBaseNoDisponible(err)) return next(err);
-  console.error('Base de datos no disponible:', err.message);
+  logger.error({ err }, 'Base de datos no disponible');
   return sendError(res, 503, 'Base de datos no disponible', 'DATABASE_UNAVAILABLE', true, 'Reintentar la misma solicitud');
 }
 

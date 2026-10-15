@@ -1,0 +1,16 @@
+# Prometheus recolecta las métricas de la api y del worker cada 5 segundos (ADR 0008).
+# Los nombres de host son los servicios de docker-compose.yml.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:3000"]
+
+  - job_name: worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["worker:9464"]

@@ -74,16 +74,16 @@ async function notificar(pago, config, log) {
         signal: AbortSignal.timeout(config.webhookTimeoutMs)
       });
       if (res.status < 500) {
-        log(`Webhook ${pago.estado} de la compra ${pago.compraId}: la api respondió ${res.status}`);
+        log(`Webhook ${pago.estado}: la api respondió ${res.status}`, { compraId: pago.compraId, correlationId: pago.correlationId, statusCode: res.status });
         return res.status;
       }
-      log(`Webhook de la compra ${pago.compraId}: la api respondió ${res.status} (intento ${intento + 1})`);
+      log(`Webhook: la api respondió ${res.status}, se reintenta`, { level: 'warn', compraId: pago.compraId, correlationId: pago.correlationId, statusCode: res.status, intento: intento + 1 });
     } catch (error) {
-      log(`Webhook de la compra ${pago.compraId}: ${error.message} (intento ${intento + 1})`);
+      log(`Webhook: ${error.message}, se reintenta`, { level: 'warn', compraId: pago.compraId, correlationId: pago.correlationId, intento: intento + 1 });
     }
     if (intento < config.webhookReintentos) await dormir(config.webhookBackoffMs * 2 ** intento);
   }
-  log(`Webhook de la compra ${pago.compraId}: se agotaron los reintentos; la api lo resolverá por conciliación`);
+  log('Webhook: se agotaron los reintentos; la api lo resolverá por conciliación', { level: 'error', compraId: pago.compraId, correlationId: pago.correlationId });
   return null;
 }
 
@@ -109,7 +109,13 @@ const publico = ({ compraId, referenciaExterna, estado, monto, motivo }) => ({
   compraId, referenciaExterna, estado, monto, ...(motivo ? { motivo } : {})
 });
 
-function crearServidor(config = configuracion(), { log = console.log } = {}) {
+// Log en JSON, una línea por evento, igual que la api (ADR 0008): `campos` suma el correlation id
+// que viaja en X-Correlation-Id desde /pagar, así el pago se sigue de punta a punta.
+function registrar(mensaje, { level = 'info', ...campos } = {}) {
+  console.log(JSON.stringify({ level, time: new Date().toISOString(), service: 'pagos-mock', msg: mensaje, ...campos }));
+}
+
+function crearServidor(config = configuracion(), { log = registrar } = {}) {
   const pagos = new Map(); // compraId → pago
 
   function resolver(pago) {
@@ -118,7 +124,7 @@ function crearServidor(config = configuracion(), { log = console.log } = {}) {
     if (config.webhookHabilitado) {
       pago.notificacion = notificar(pago, config, log);
     } else {
-      log(`Pago ${pago.estado} de la compra ${pago.compraId}: webhook deshabilitado (WEBHOOK_HABILITADO=false)`);
+      log(`Pago ${pago.estado}: webhook deshabilitado (WEBHOOK_HABILITADO=false)`, { compraId: pago.compraId, correlationId: pago.correlationId });
     }
   }
 
@@ -142,7 +148,7 @@ function crearServidor(config = configuracion(), { log = console.log } = {}) {
     };
     pagos.set(compraId, pago);
     setTimeout(() => resolver(pago), config.pagoDemoraMs).unref();
-    log(`Pago ${pago.referenciaExterna} solicitado para la compra ${compraId} (escenario ${escenario})`);
+    log(`Pago solicitado (escenario ${escenario})`, { compraId, referenciaExterna: pago.referenciaExterna, correlationId: pago.correlationId });
     return responder(res, 201, publico(pago));
   }
 
@@ -150,7 +156,7 @@ function crearServidor(config = configuracion(), { log = console.log } = {}) {
     const url = new URL(req.url, 'http://pagos-mock');
     if (req.method === 'GET' && url.pathname === '/health') return responder(res, 200, { status: 'ok', servicio: 'pagos-mock' });
     if (req.method === 'POST' && url.pathname === '/pagos') {
-      return crearPago(req, res).catch((falla) => { log(`Error: ${falla.message}`); error(res, 500, 'INTERNAL_ERROR', 'Error interno'); });
+      return crearPago(req, res).catch((falla) => { log(`Error: ${falla.message}`, { level: 'error' }); error(res, 500, 'INTERNAL_ERROR', 'Error interno'); });
     }
     if (req.method === 'GET' && url.pathname === '/pagos') {
       const compraId = url.searchParams.get('compraId');
@@ -167,12 +173,12 @@ function crearServidor(config = configuracion(), { log = console.log } = {}) {
   return servidor;
 }
 
-module.exports = { crearServidor, configuracion, firmar };
+module.exports = { crearServidor, configuracion, firmar, registrar };
 
 if (require.main === module) {
   const config = configuracion();
   const servidor = crearServidor(config);
-  servidor.listen(config.port, () => console.log(`pagos-mock escuchando en http://localhost:${config.port}`));
+  servidor.listen(config.port, () => registrar('pagos-mock escuchando', { port: config.port }));
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.on(signal, () => servidor.close(() => process.exit(0)));
   }
