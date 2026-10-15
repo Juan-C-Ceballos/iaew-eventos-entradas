@@ -2,19 +2,22 @@ require('dotenv').config();
 const { getChannel, consumirEntradaComprada, closeRabbit, QUEUE } = require('./lib/rabbit');
 const { retryConfig, plazosConfig } = require('./lib/config');
 const { crearManejador } = require('./lib/consumidor');
+const { iniciarBarrido } = require('./lib/barrido');
 const { emitirEntradasDeCompra } = require('./services/emision');
 const { connectDb, closeDb } = require('./db');
 
-// Consumidor de `entrada.comprada` (ADR 0005): emite las entradas de cada compra pagada. El barrido
-// periódico (vencimientos, conciliación de pagos y reconciliación de cupo) se suma en la Fase 6.
+// Consumidor de `entrada.comprada` (ADR 0005), que emite las entradas de cada compra pagada, y
+// barrido periódico (ADR 0010 y 0011): vencimientos, conciliación de pagos, cierre de eventos,
+// cascada de cancelaciones y reconciliación de cupo.
 let cerrando = false;
 let consumidor;
+let detenerBarrido = async () => {};
 let enCurso = Promise.resolve();
 
 async function startWorker() {
   // Falla al arrancar si RETRY_DELAY_MS o MAX_RETRIES son inválidos, en vez de descubrirlo en el primer reintento.
   const { retryDelayMs, maxRetries } = retryConfig();
-  const { barridoIntervaloMs } = plazosConfig();
+  const { barridoIntervaloMs, eventoFinalizaTrasHoras } = plazosConfig();
 
   await connectDb();
   const channel = await getChannel();
@@ -34,7 +37,8 @@ async function startWorker() {
   });
   // Con prefetch(1) hay a lo sumo un mensaje en curso: se guarda su promesa para esperarlo al apagar.
   consumidor = await consumirEntradaComprada((canal, msg) => { enCurso = manejar(canal, msg); });
-  console.log(`Worker listo: consumiendo ${QUEUE} (reintentos: ${maxRetries} cada ${retryDelayMs} ms; barrido cada ${barridoIntervaloMs} ms, a partir de la Fase 6)`);
+  detenerBarrido = iniciarBarrido({ intervaloMs: barridoIntervaloMs, eventoFinalizaTrasHoras });
+  console.log(`Worker listo: consumiendo ${QUEUE} (reintentos: ${maxRetries} cada ${retryDelayMs} ms; barrido cada ${barridoIntervaloMs} ms; eventos finalizan ${eventoFinalizaTrasHoras} h después de su fecha)`);
 }
 
 async function detener() {
@@ -42,6 +46,7 @@ async function detener() {
   // Se deja de recibir mensajes nuevos; el que está en curso termina antes de cerrar (prefetch 1).
   await consumidor?.detener().catch(() => {});
   await enCurso;
+  await detenerBarrido();
   await closeRabbit();
   await closeDb();
 }

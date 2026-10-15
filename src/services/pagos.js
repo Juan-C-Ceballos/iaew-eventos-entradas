@@ -161,4 +161,19 @@ async function procesarNotificacionPago(notificacion, { correlationId }, depende
   return { recibido: true, duplicado: resultado === 'duplicado', compraId: String(compra._id), estadoCompra: compra.estado };
 }
 
-module.exports = { solicitarPago, registrarPagoAprobado, registrarPagoRechazado, procesarNotificacionPago, presentarCompra };
+// `pago_pendiente → expirada` cuando la pasarela dice que no conoce el pago (ADR 0010): se libera
+// el cupo y solo quien gana la transición lo hace. Si más tarde la pasarela cobrara igual, el
+// webhook `aprobado` encuentra la compra expirada y la marca `reembolsoPendiente`.
+async function expirarPagoSinRegistro(compraId, dependencias = {}) {
+  const { Compra = CompraModel, Evento = EventoModel, ahora = new Date() } = dependencias;
+  const expirada = await Compra.findOneAndUpdate(
+    { _id: compraId, estado: 'pago_pendiente' },
+    { $set: { estado: 'expirada', 'pago.procesadoEn': ahora, 'pago.motivoRechazo': 'pago_no_registrado_en_la_pasarela' } },
+    { new: true }
+  ).lean();
+  if (!expirada) return false;
+  await Evento.updateOne({ _id: expirada.eventoId }, { $inc: { cupoDisponible: expirada.cantidad } });
+  return true;
+}
+
+module.exports = { solicitarPago, registrarPagoAprobado, registrarPagoRechazado, expirarPagoSinRegistro, procesarNotificacionPago, presentarCompra };

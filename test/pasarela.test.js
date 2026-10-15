@@ -62,3 +62,34 @@ test('el middleware de correlación respeta un id válido y genera un UUID si fa
     assert.equal(generado.cabeceras['X-Correlation-Id'], generado.id);
   }
 });
+
+const { consultarPago } = require('../src/lib/pasarela');
+
+test('consultarPago devuelve el estado que informa la pasarela', async () => {
+  let url;
+  const fetchImpl = async (u) => { url = u; return respuesta(200, { compraId: COBRO.compraId, estado: 'aprobado', referenciaExterna: 'PAY-1234abcd', monto: 50000 }); };
+  assert.deepEqual(await consultarPago(COBRO.compraId, { baseUrl: 'http://pagos-mock:4000', fetchImpl }), { estado: 'aprobado', referenciaExterna: 'PAY-1234abcd', motivo: undefined });
+  assert.equal(url, `http://pagos-mock:4000/pagos?compraId=${COBRO.compraId}`);
+
+  const rechazado = await consultarPago(COBRO.compraId, { fetchImpl: async () => respuesta(200, { estado: 'rechazado', referenciaExterna: 'PAY-2', motivo: 'fondos_insuficientes' }) });
+  assert.deepEqual([rechazado.estado, rechazado.motivo], ['rechazado', 'fondos_insuficientes']);
+  assert.equal((await consultarPago(COBRO.compraId, { fetchImpl: async () => respuesta(200, { estado: 'pendiente', referenciaExterna: 'PAY-3' }) })).estado, 'pendiente');
+});
+
+test('consultarPago devuelve null solo si la pasarela dice PAYMENT_NOT_FOUND', async () => {
+  assert.equal(await consultarPago(COBRO.compraId, { fetchImpl: async () => respuesta(404, { code: 'PAYMENT_NOT_FOUND' }) }), null);
+});
+
+test('consultarPago lanza ante cualquier otra cosa: no se expira una compra porque la pasarela no respondió', async () => {
+  const casos = [
+    async () => { throw new TypeError('fetch failed'); },
+    async () => { throw new DOMException('timeout', 'TimeoutError'); },
+    async () => respuesta(404, { code: 'ROUTE_NOT_FOUND' }),   // otro servicio o ruta equivocada
+    async () => respuesta(404, null),
+    async () => respuesta(500, {}),
+    async () => respuesta(200, { estado: 'inventado', referenciaExterna: 'PAY-1' }),
+    async () => respuesta(200, { estado: 'aprobado' }),
+    async () => ({ status: 200, json: async () => { throw new SyntaxError('no es JSON'); } })
+  ];
+  for (const fetchImpl of casos) await assert.rejects(consultarPago(COBRO.compraId, { fetchImpl }));
+});

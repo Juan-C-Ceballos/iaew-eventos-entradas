@@ -36,4 +36,28 @@ async function solicitarCobro({ compraId, monto, escenario, correlationId }, { b
   return { referenciaExterna: cuerpo.referenciaExterna };
 }
 
-module.exports = { solicitarCobro };
+const ESTADOS_DE_PAGO = ['pendiente', 'aprobado', 'rechazado'];
+
+// Consulta el estado de un pago a la pasarela para conciliar una compra cuyo webhook no llegó
+// (ADR 0010). Devuelve `{ estado, referenciaExterna, motivo? }`, o `null` si la pasarela dice que
+// no conoce ese pago. Cualquier otra cosa (red, 5xx, respuesta inesperada) lanza: expirar una
+// compra porque la pasarela no respondió dejaría plata cobrada sin entrada, así que ante la duda
+// no se concluye nada y se vuelve a consultar en el próximo barrido.
+async function consultarPago(compraId, { baseUrl = process.env.PAGOS_URL || 'http://localhost:4000', fetchImpl = fetch, timeoutMs = TIMEOUT_MS } = {}) {
+  let res;
+  try {
+    res = await fetchImpl(`${baseUrl}/pagos?compraId=${encodeURIComponent(String(compraId))}`, { signal: AbortSignal.timeout(timeoutMs) });
+  } catch (error) {
+    throw new Error(`No se pudo consultar el pago de la compra ${compraId}: ${error.message}`);
+  }
+  const cuerpo = await res.json().catch(() => null);
+  // Un 404 solo vale como "no la conozco" si lo dice la pasarela: otro servicio o una ruta
+  // equivocada también responden 404 y no deben expirar compras.
+  if (res.status === 404 && cuerpo?.code === 'PAYMENT_NOT_FOUND') return null;
+  if (res.status !== 200 || !ESTADOS_DE_PAGO.includes(cuerpo?.estado) || typeof cuerpo.referenciaExterna !== 'string') {
+    throw new Error(`Respuesta inesperada de la pasarela al consultar la compra ${compraId}: ${res.status}`);
+  }
+  return { estado: cuerpo.estado, referenciaExterna: cuerpo.referenciaExterna, motivo: cuerpo.motivo };
+}
+
+module.exports = { solicitarCobro, consultarPago };
