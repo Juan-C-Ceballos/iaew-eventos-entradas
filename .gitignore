@@ -30,3 +30,6 @@ docker-compose.override.yml
 
 # Entregables generados con git archive
 *.zip
+
+# Resultados crudos de la prueba de carga (se regeneran en cada corrida; el reporte HTML y el resumen sí se commitean)
+carga/reporte/resultados.jtl

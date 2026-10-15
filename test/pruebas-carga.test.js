@@ -139,9 +139,14 @@ test('el plan de JMeter es XML bien formado y sus samplers pegan a operaciones d
 
 test('el runner de la prueba de carga pasa a JMeter los mismos parámetros que lee el plan', () => {
   const runner = leer('carga/ejecutar.js');
-  for (const parametro of ['host', 'port', 'protocolo', 'token', 'eventoId', 'hilos', 'rampa', 'duracion']) {
+  for (const parametro of ['host', 'port', 'protocolo', 'eventoId', 'hilos', 'rampa', 'duracion']) {
     assert.match(runner, new RegExp(`-J${parametro}=`), `ejecutar.js no pasa -J${parametro}`);
   }
+  // El token no viaja como argumento (la imagen de JMeter imprime sus argumentos): va en un archivo de propiedades temporal.
+  assert.equal(runner.includes('-Jtoken='), false, 'el token no debe pasarse con -J');
+  assert.match(runner, /token\.properties/);
+  assert.match(runner, /'-q', '\/secretos\/token\.properties'/);
+  assert.match(runner, /fs\.rmSync\(secretos/, 'el archivo del token se borra al terminar');
   assert.match(runner, /host\.docker\.internal/, 'el contenedor de JMeter llega a la API del host');
 });
 

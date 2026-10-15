@@ -1,0 +1,102 @@
+{
+  "escenario": {
+    "hilos": 30,
+    "rampaSegundos": 10,
+    "duracionSegundos": 90,
+    "baseUrl": "http://localhost:3000",
+    "eventoId": "6ad102240c6172777e3cc5c2"
+  },
+  "jmeter": {
+    "GET /eventos": {
+      "muestras": 1495,
+      "errores": 0,
+      "errorPct": 0,
+      "throughput": 16.72,
+      "promedioMs": 119,
+      "p90Ms": 235.4,
+      "p95Ms": 320,
+      "p99Ms": 597.1,
+      "maxMs": 1000
+    },
+    "GET /eventos/{id}": {
+      "muestras": 1490,
+      "errores": 0,
+      "errorPct": 0,
+      "throughput": 16.72,
+      "promedioMs": 112.8,
+      "p90Ms": 228,
+      "p95Ms": 319.4,
+      "p99Ms": 534,
+      "maxMs": 981
+    },
+    "GET /compras/{id}": {
+      "muestras": 1476,
+      "errores": 0,
+      "errorPct": 0,
+      "throughput": 16.7,
+      "promedioMs": 114.5,
+      "p90Ms": 223.3,
+      "p95Ms": 298.3,
+      "p99Ms": 590.9,
+      "maxMs": 988
+    },
+    "Total": {
+      "muestras": 6395,
+      "errores": 0,
+      "errorPct": 0,
+      "throughput": 71.37,
+      "promedioMs": 148.8,
+      "p90Ms": 315,
+      "p95Ms": 437.4,
+      "p99Ms": 805.1,
+      "maxMs": 1548
+    },
+    "POST /compras/{id}/pagar": {
+      "muestras": 450,
+      "errores": 0,
+      "errorPct": 0,
+      "throughput": 5.14,
+      "promedioMs": 277.5,
+      "p90Ms": 545.7,
+      "p95Ms": 739,
+      "p99Ms": 1399.5,
+      "maxMs": 1548
+    },
+    "POST /compras": {
+      "muestras": 1484,
+      "errores": 0,
+      "errorPct": 0,
+      "throughput": 16.69,
+      "promedioMs": 210,
+      "p90Ms": 442.5,
+      "p95Ms": 554.8,
+      "p99Ms": 1111.1,
+      "maxMs": 1333
+    }
+  },
+  "prometheus": {
+    "p95_segundos": {
+      "maximo": 0.4875,
+      "muestras": 25
+    },
+    "throughput_req_por_segundo": {
+      "maximo": 95.0438,
+      "muestras": 25
+    },
+    "error_rate_5xx": {
+      "maximo": 0,
+      "muestras": 25
+    },
+    "entradas_vendidas": 450,
+    "entradas_emitidas": 450,
+    "mensajes_ok": 450,
+    "mensajes_reintentados": 0,
+    "mensajes_en_dlq": 0,
+    "pagos_fallidos": 0
+  },
+  "objetivos": {
+    "errorPctMenorA1": true,
+    "p95TotalMenorA500ms": true,
+    "cumple": true
+  }
+}
