@@ -94,6 +94,42 @@ async function publishEntradaComprada(event) {
   });
 }
 
+// Consumo con ack manual y prefetch(1): un mensaje a la vez, y no se confirma hasta que el
+// resultado quedó persistido (ADR 0005). `onMessage(canal, msg)` se encarga de confirmar o
+// derivar el mensaje; un callback con `null` (cola cancelada por el broker) se ignora.
+async function consumirEntradaComprada(onMessage, { prefetch = 1 } = {}) {
+  const canal = await getChannel();
+  await canal.prefetch(prefetch);
+  const { consumerTag } = await canal.consume(QUEUE, (msg) => { if (msg) onMessage(canal, msg); }, { noAck: false });
+  return { canal, consumerTag, detener: () => canal.cancel(consumerTag) };
+}
+
+const intentosDe = (msg) => Number(msg.properties.headers?.['x-retry-count'] ?? 0);
+const mensajeCorto = (error) => String(error?.message ?? error).slice(0, 500);
+
+// Reencola el mensaje en la cola de retry con la espera como `expiration` (no como argumento de
+// la cola: ver declararTopologia). Al vencer, el dead-letter lo devuelve al exchange principal.
+// Devuelve el número de intento. Si la publicación falla, lanza: el llamador NO debe confirmar.
+async function publicarReintento(canal, msg, { retryDelayMs, error }) {
+  const intento = intentosDe(msg) + 1;
+  await confirmedPublish(canal, RETRY_EXCHANGE, ROUTING_KEY, msg.content, {
+    contentType: 'application/json', persistent: true,
+    messageId: msg.properties.messageId, correlationId: msg.properties.correlationId, type: msg.properties.type,
+    expiration: String(retryDelayMs),
+    headers: { ...msg.properties.headers, 'x-retry-count': intento, 'x-last-error': mensajeCorto(error) }
+  });
+  return intento;
+}
+
+// Deriva el mensaje a la DLQ con el motivo, para inspeccionarlo en la consola de RabbitMQ.
+async function publicarEnDlq(canal, msg, { reason, error }) {
+  await confirmedPublish(canal, DLX, DLQ_ROUTING_KEY, msg.content, {
+    contentType: msg.properties.contentType || 'application/json', persistent: true,
+    messageId: msg.properties.messageId, correlationId: msg.properties.correlationId, type: msg.properties.type,
+    headers: { ...msg.properties.headers, 'x-dlq-reason': reason, 'x-last-error': mensajeCorto(error) }
+  });
+}
+
 async function closeRabbit() {
   const activeConnection = connection;
   connection = undefined;
@@ -108,5 +144,5 @@ async function closeRabbit() {
 
 module.exports = {
   EXCHANGE, ROUTING_KEY, QUEUE, RETRY_EXCHANGE, RETRY_QUEUE, DLX, DLQ_ROUTING_KEY, DLQ,
-  declararTopologia, getChannel, publishEntradaComprada, closeRabbit
+  declararTopologia, getChannel, publishEntradaComprada, consumirEntradaComprada, publicarReintento, publicarEnDlq, intentosDe, closeRabbit
 };
