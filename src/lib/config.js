@@ -1,5 +1,5 @@
-function integerFromEnv(name, fallback, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
-  const raw = process.env[name];
+function integerFromEnv(name, fallback, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}, env = process.env) {
+  const raw = env[name];
   if (raw === undefined || raw === '') return fallback;
   const value = Number(raw);
   if (!Number.isInteger(value) || value < min || value > max) {
@@ -26,6 +26,15 @@ function plazosConfig() {
   };
 }
 
+// Verificación del webhook de pago (ADR 0006): secreto compartido con la pasarela y ventana
+// anti-replay. Se lee en cada solicitud, así que el secreto se puede rotar reiniciando solo la api.
+function webhookConfig(env = process.env) {
+  return {
+    secreto: env.WEBHOOK_SECRET,
+    toleranciaSegundos: integerFromEnv('WEBHOOK_TOLERANCIA_SEGUNDOS', 300, { min: 1, max: 86400 }, env)
+  };
+}
+
 // Validación del access token. `AUTH0_ISSUER_URL` es opcional y existe para apuntar a un emisor
 // local en las pruebas; en el sistema real el issuer se deriva de `AUTH0_DOMAIN`. La librería
 // rechaza un issuer http:// cuando NODE_ENV=production.
@@ -37,4 +46,4 @@ function auth0Config(env = process.env) {
   };
 }
 
-module.exports = { integerFromEnv, retryConfig, plazosConfig, auth0Config };
+module.exports = { integerFromEnv, retryConfig, plazosConfig, webhookConfig, auth0Config };

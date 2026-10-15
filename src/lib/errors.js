@@ -23,4 +23,16 @@ function manejarApiError(err, req, res, next) {
   return sendError(res, err.status, err.message, err.code, err.retryable, err.action, err.details);
 }
 
-module.exports = { sendError, ApiError, errorDeValidacion, manejarApiError };
+// Errores que indican que MongoDB no responde (caído, sin conexión o sin cola de espera): la
+// solicitud es válida y se puede reintentar, así que se informa como 503 y no como 500.
+const ERRORES_DE_BASE = ['MongoNetworkError', 'MongoNetworkTimeoutError', 'MongoServerSelectionError', 'MongooseServerSelectionError', 'MongoNotConnectedError', 'MongoPoolClearedError'];
+
+const esBaseNoDisponible = (err) => ERRORES_DE_BASE.includes(err?.name) || /buffering timed out/i.test(err?.message ?? '');
+
+function manejarErrorDeBase(err, req, res, next) {
+  if (!esBaseNoDisponible(err)) return next(err);
+  console.error('Base de datos no disponible:', err.message);
+  return sendError(res, 503, 'Base de datos no disponible', 'DATABASE_UNAVAILABLE', true, 'Reintentar la misma solicitud');
+}
+
+module.exports = { sendError, ApiError, errorDeValidacion, manejarApiError, esBaseNoDisponible, manejarErrorDeBase };

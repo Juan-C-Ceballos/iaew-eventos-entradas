@@ -1,3 +1,4 @@
+const crypto = require('node:crypto');
 const CompraModel = require('../models/Compra');
 const EventoModel = require('../models/Evento');
 const { ApiError } = require('../lib/errors');
@@ -81,4 +82,83 @@ async function solicitarPago(id, { escenario = 'aprobado' } = {}, { clave, clien
   });
 }
 
-module.exports = { solicitarPago, presentarCompra };
+// Estados desde los que un pago aprobado ya no tiene a quién acreditarse (ADR 0010).
+const RESUELTAS_SIN_PAGO = ['expirada', 'rechazada', 'cancelada'];
+
+// Paso 3 del flujo (ADR 0006 y 0009), compartido por el webhook y la conciliación del barrido.
+// Un único findOneAndUpdate condicional (`pago_pendiente → pagada`) guarda el estado y el sobre
+// de `entrada.comprada` (outbox): el relay lo publica después, sin que el webhook toque RabbitMQ.
+// Devuelve `{ resultado, compra }` con resultado `aplicado`, `duplicado` (ya estaba pagada) o
+// `conflicto` (el estado actual no admite el pago).
+async function registrarPagoAprobado(compraId, { referenciaExterna, correlationId }, dependencias = {}) {
+  const { Compra = CompraModel, Evento = EventoModel, ahora = new Date() } = dependencias;
+  const compra = await Compra.findById(compraId).lean();
+  if (!compra) throw compraNoEncontrada();
+
+  // Un pago aprobado sobre un evento cancelado se acepta, pero no hay entrada utilizable: queda
+  // marcado para reembolso (ADR 0011). Si el evento se cancela justo después de esta lectura, la
+  // cascada del barrido marca la compra pagada.
+  const evento = await Evento.findById(compra.eventoId).select('estado').lean();
+  const set = {
+    estado: 'pagada',
+    'pago.estado': 'aprobado',
+    'pago.procesadoEn': ahora,
+    // El webhook puede llegar antes de que /pagar guarde la referencia: la de la pasarela manda.
+    'pago.referenciaExterna': referenciaExterna,
+    emisionEvento: {
+      eventId: crypto.randomUUID(), type: 'entrada.comprada', version: 1,
+      occurredAt: ahora.toISOString(), correlationId, data: { compraId: String(compra._id) }
+    },
+    emisionEstado: 'pendiente'
+  };
+  if (evento?.estado === 'cancelado') set.reembolsoPendiente = true;
+
+  const pagada = await Compra.findOneAndUpdate({ _id: compra._id, estado: 'pago_pendiente' }, { $set: set }, { new: true }).lean();
+  if (pagada) return { resultado: 'aplicado', compra: pagada };
+
+  const actual = await Compra.findById(compra._id).lean();
+  if (actual.estado === 'pagada') return { resultado: 'duplicado', compra: actual };
+  if (RESUELTAS_SIN_PAGO.includes(actual.estado)) {
+    // Cobrado sin entrada: el único caso residual del ADR 0010. No hay reembolso real, solo la marca.
+    await Compra.updateOne({ _id: compra._id, estado: actual.estado, reembolsoPendiente: { $ne: true } }, { $set: { reembolsoPendiente: true } });
+    console.error(`Pago aprobado sobre la compra ${compra._id} en estado ${actual.estado}: cobrado sin entrada, queda reembolsoPendiente`);
+  }
+  return { resultado: 'conflicto', compra: actual };
+}
+
+// `pago_pendiente → rechazada` y devolución del cupo. Solo quien gana la transición libera el cupo.
+async function registrarPagoRechazado(compraId, { referenciaExterna, motivo }, dependencias = {}) {
+  const { Compra = CompraModel, Evento = EventoModel, ahora = new Date() } = dependencias;
+  const compra = await Compra.findById(compraId).lean();
+  if (!compra) throw compraNoEncontrada();
+
+  const set = { estado: 'rechazada', 'pago.estado': 'rechazado', 'pago.procesadoEn': ahora, 'pago.referenciaExterna': referenciaExterna };
+  if (motivo !== undefined) set['pago.motivoRechazo'] = motivo;
+  const rechazada = await Compra.findOneAndUpdate({ _id: compra._id, estado: 'pago_pendiente' }, { $set: set }, { new: true }).lean();
+  if (rechazada) {
+    await Evento.updateOne({ _id: rechazada.eventoId }, { $inc: { cupoDisponible: rechazada.cantidad } });
+    return { resultado: 'aplicado', compra: rechazada };
+  }
+
+  const actual = await Compra.findById(compra._id).lean();
+  return { resultado: actual.estado === 'rechazada' ? 'duplicado' : 'conflicto', compra: actual };
+}
+
+// Procesa una notificación del webhook ya autenticada y validada. Devuelve el cuerpo del ACK
+// (WebhookAck) o lanza 409 si la notificación contradice el estado de la compra.
+async function procesarNotificacionPago(notificacion, { correlationId }, dependencias = {}) {
+  const { compraId, referenciaExterna, motivo } = notificacion.data;
+  const { resultado, compra } = notificacion.type === 'pago.aprobado'
+    ? await registrarPagoAprobado(compraId, { referenciaExterna, correlationId }, dependencias)
+    : await registrarPagoRechazado(compraId, { referenciaExterna, motivo }, dependencias);
+
+  if (resultado === 'conflicto') {
+    throw new ApiError({
+      status: 409, error: `La notificación ${notificacion.type} contradice el estado de la compra (${compra.estado})`,
+      code: 'PURCHASE_INVALID_STATE', action: 'Consultar el estado con GET /compras/{id}', details: { estado: compra.estado }
+    });
+  }
+  return { recibido: true, duplicado: resultado === 'duplicado', compraId: String(compra._id), estadoCompra: compra.estado };
+}
+
+module.exports = { solicitarPago, registrarPagoAprobado, registrarPagoRechazado, procesarNotificacionPago, presentarCompra };
