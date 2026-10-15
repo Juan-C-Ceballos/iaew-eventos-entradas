@@ -105,6 +105,8 @@ services:
       PORT: 4000
       WEBHOOK_URL: http://api:3000/webhooks/pagos
       WEBHOOK_SECRET: ${WEBHOOK_SECRET:-colocar-secreto-compartido-local}
+      PAGO_DEMORA_MS: ${PAGO_DEMORA_MS:-200}
+      WEBHOOK_HABILITADO: ${WEBHOOK_HABILITADO:-true}
 
 volumes:
   mongo-data:

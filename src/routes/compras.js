@@ -4,6 +4,7 @@ const { validarCuerpo } = require('../lib/validar');
 const { asyncHandler, validarId } = require('../lib/http');
 const { requerirIdempotencyKey } = require('../lib/idempotencia');
 const compras = require('../services/compras');
+const pagos = require('../services/pagos');
 
 const router = express.Router();
 const buy = requireScope('buy:entradas');
@@ -26,6 +27,14 @@ router.get('/:id', ...buy, validarId(),
 
 router.post('/:id/cancelar', ...buy, validarId(),
   asyncHandler(async (req, res) => res.json(await compras.cancelar(req.params.id, clienteDe(req)))));
+
+router.post('/:id/pagar', ...buy, validarId(), requerirIdempotencyKey, validarCuerpo('PagoSolicitar', { mensaje: 'Datos de pago inválidos' }),
+  asyncHandler(async (req, res) => {
+    const { compra, replayed } = await pagos.solicitarPago(req.params.id, req.body, { clave: req.idempotencyKey, cliente: clienteDe(req), correlationId: req.correlationId });
+    res.status(202)
+      .set('Idempotency-Replayed', String(replayed))
+      .json({ compra: compras.presentarCompra(compra), idempotencia: { key: req.idempotencyKey, replayed } });
+  }));
 
 router.get('/:id/entradas', ...buy, validarId(),
   asyncHandler(async (req, res) => res.json(await compras.entradasDe(req.params.id, clienteDe(req)))));

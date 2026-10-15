@@ -42,6 +42,7 @@ const OPERACIONES = [
   ['POST', '/compras'],
   ['GET', '/compras'],
   ['GET', `/compras/${ID}`],
+  ['POST', `/compras/${ID}/pagar`],
   ['POST', `/compras/${ID}/cancelar`],
   ['GET', `/compras/${ID}/entradas`]
 ];
@@ -104,7 +105,31 @@ test('GET /compras con filtros inválidos responde 400 VALIDATION_ERROR', async 
   assert.equal((await res.json()).code, 'VALIDATION_ERROR');
 });
 
-test('pagar sigue respondiendo 501 hasta la Fase 3', async () => {
-  const res = await llamar('POST', `/compras/${ID}/pagar`, { scope: 'buy:entradas', cuerpo: {} });
-  assert.equal(res.status, 501);
+test('POST /compras/{id}/pagar exige Idempotency-Key válida y un escenario conocido', async () => {
+  const ruta = `/compras/${ID}/pagar`;
+  const sinClave = await llamar('POST', ruta, { scope: 'buy:entradas', cuerpo: {} });
+  assert.equal(sinClave.status, 400);
+  assert.equal((await sinClave.json()).code, 'IDEMPOTENCY_KEY_REQUIRED');
+
+  const invalida = await llamar('POST', ruta, { scope: 'buy:entradas', cuerpo: {}, cabeceras: { 'Idempotency-Key': 'corta' } });
+  assert.equal((await invalida.json()).code, 'IDEMPOTENCY_KEY_INVALID');
+
+  const escenario = await llamar('POST', ruta, { scope: 'buy:entradas', cuerpo: { escenario: 'raro', tarjeta: '4111' }, cabeceras: { 'Idempotency-Key': 'clave-valida-0001' } });
+  assert.equal(escenario.status, 400);
+  const cuerpo = await escenario.json();
+  assert.equal(cuerpo.code, 'VALIDATION_ERROR');
+  assert.deepEqual(Object.keys(cuerpo.details).sort(), ['escenario', 'tarjeta']);
+});
+
+test('POST /compras/{id}/pagar con un id mal formado responde 400 INVALID_ID', async () => {
+  const res = await llamar('POST', '/compras/abc/pagar', { scope: 'buy:entradas', cuerpo: {}, cabeceras: { 'Idempotency-Key': 'clave-valida-0001' } });
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).code, 'INVALID_ID');
+});
+
+test('toda respuesta lleva X-Correlation-Id y se respeta el que envía el cliente', async () => {
+  const generado = await llamar('GET', '/compras', { scope: 'buy:entradas' });
+  assert.match(generado.headers.get('x-correlation-id'), /^[0-9a-f-]{36}$/);
+  const propio = await llamar('GET', '/compras', { scope: 'buy:entradas', cabeceras: { 'X-Correlation-Id': 'demo-0001' } });
+  assert.equal(propio.headers.get('x-correlation-id'), 'demo-0001');
 });

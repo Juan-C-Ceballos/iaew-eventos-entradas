@@ -6,6 +6,7 @@ const { validateAccessToken, manejarErrorAuth } = require('./middleware/auth0');
 const { sendError, manejarApiError } = require('./lib/errors');
 const eventosRouter = require('./routes/eventos');
 const comprasRouter = require('./routes/compras');
+const { correlacion } = require('./middleware/correlacion');
 const { openapi, pendingRoutes } = require('./lib/contrato');
 const { integerFromEnv, plazosConfig } = require('./lib/config');
 const { iniciarRelay } = require('./lib/outbox');
@@ -16,6 +17,7 @@ const { closeRabbit } = require('./lib/rabbit');
 const app = express();
 const port = process.env.PORT || 3000;
 
+app.use(correlacion);
 app.use(jsonBody);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
@@ -32,7 +34,7 @@ app.use('/compras', comprasRouter);
 const RUTAS_IMPLEMENTADAS = [
   '/health', '/token-info',
   '/eventos', '/eventos/{id}', '/eventos/{id}/cancelar',
-  '/compras', '/compras/{id}', '/compras/{id}/cancelar', '/compras/{id}/entradas'
+  '/compras', '/compras/{id}', '/compras/{id}/pagar', '/compras/{id}/cancelar', '/compras/{id}/entradas'
 ];
 for (const { method, expressPath } of pendingRoutes(RUTAS_IMPLEMENTADAS)) {
   app[method](expressPath, (req, res) => sendError(res, 501, 'Operación documentada en el contrato y pendiente de implementación', 'NOT_IMPLEMENTED', false, 'Disponible en la Entrega 2; ver /api-docs'));

@@ -179,6 +179,20 @@ async function cancelar(id, cliente, { Compra = CompraModel, Evento = EventoMode
   });
 }
 
+// `pendiente → expirada` cuando venció `reservaExpiraEn`, y devuelve el cupo. Es condicional al
+// estado y al vencimiento: lo usan `/pagar` (de forma perezosa) y el barrido, y quien gana la
+// transición es el único que libera el cupo. Devuelve `true` si esta llamada expiró la compra.
+async function expirarReserva(compraId, { Compra = CompraModel, Evento = EventoModel, ahora = new Date() } = {}) {
+  const expirada = await Compra.findOneAndUpdate(
+    { _id: compraId, estado: 'pendiente', reservaExpiraEn: { $lte: ahora } },
+    { $set: { estado: 'expirada' } },
+    { new: true }
+  ).lean();
+  if (!expirada) return false;
+  await Evento.updateOne({ _id: expirada.eventoId }, { $inc: { cupoDisponible: expirada.cantidad } });
+  return true;
+}
+
 // Vacío hasta que el worker procesa entrada.comprada: es el efecto visible del flujo asincrónico.
 async function entradasDe(id, cliente, { Compra = CompraModel, Entrada = EntradaModel } = {}) {
   if (!(await Compra.exists(deCliente(id, cliente)))) throw compraNoEncontrada();
@@ -186,4 +200,4 @@ async function entradasDe(id, cliente, { Compra = CompraModel, Entrada = Entrada
   return entradas.map(presentarEntrada);
 }
 
-module.exports = { reservar, listar, obtener, cancelar, entradasDe, presentarCompra };
+module.exports = { reservar, listar, obtener, cancelar, expirarReserva, entradasDe, presentarCompra, deCliente, compraNoEncontrada };

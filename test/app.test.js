@@ -49,7 +49,7 @@ test('GET /token-info sin token responde 401 TOKEN_INVALID', async () => {
 });
 
 test('una operación del contrato aún no implementada responde 501', async () => {
-  const res = await fetch(`${base}/compras/66f000000000000000000001/pagar`, { method: 'POST' });
+  const res = await fetch(`${base}/entradas/ENT-7K2M9Q4XA1B3/validar`, { method: 'POST' });
   assert.equal(res.status, 501);
   assertError(await res.json(), 'NOT_IMPLEMENTED');
 });
