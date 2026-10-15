@@ -6,9 +6,11 @@ const { validateAccessToken, manejarErrorAuth } = require('./middleware/auth0');
 const { sendError, manejarApiError, manejarErrorDeBase } = require('./lib/errors');
 const eventosRouter = require('./routes/eventos');
 const comprasRouter = require('./routes/compras');
+const entradasRouter = require('./routes/entradas');
 const webhooksRouter = require('./routes/webhooks');
+const internalRouter = require('./routes/internal');
 const { correlacion } = require('./middleware/correlacion');
-const { openapi, pendingRoutes } = require('./lib/contrato');
+const { openapi } = require('./lib/contrato');
 const { integerFromEnv, plazosConfig } = require('./lib/config');
 const { iniciarRelay } = require('./lib/outbox');
 const { describirToken } = require('./lib/token');
@@ -26,22 +28,12 @@ app.get('/api-docs/openapi.json', (req, res) => res.json(openapi));
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openapi));
 app.get('/token-info', validateAccessToken, (req, res) => res.json(describirToken(req.auth.payload)));
 
+// Cada operación de docs/openapi.json tiene su ruta; test/contrato-rutas.test.js lo verifica.
 app.use('/eventos', eventosRouter);
 app.use('/compras', comprasRouter);
+app.use('/entradas', entradasRouter);
 app.use('/webhooks', webhooksRouter);
-
-// Operaciones del contrato aún no implementadas: responden 501 en vez de 404 para que
-// el esqueleto refleje el contrato completo. Cada router real se monta antes que esto y su
-// ruta se agrega a la lista de implementadas.
-const RUTAS_IMPLEMENTADAS = [
-  '/health', '/token-info',
-  '/eventos', '/eventos/{id}', '/eventos/{id}/cancelar',
-  '/compras', '/compras/{id}', '/compras/{id}/pagar', '/compras/{id}/cancelar', '/compras/{id}/entradas',
-  '/webhooks/pagos'
-];
-for (const { method, expressPath } of pendingRoutes(RUTAS_IMPLEMENTADAS)) {
-  app[method](expressPath, (req, res) => sendError(res, 501, 'Operación documentada en el contrato y pendiente de implementación', 'NOT_IMPLEMENTED', false, 'Disponible en la Entrega 2; ver /api-docs'));
-}
+app.use('/internal', internalRouter);
 
 app.use((req, res) => sendError(res, 404, 'Ruta inexistente', 'ROUTE_NOT_FOUND', false, 'Consultar el contrato en /api-docs'));
 

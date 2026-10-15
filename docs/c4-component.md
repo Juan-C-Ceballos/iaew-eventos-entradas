@@ -58,7 +58,7 @@ El formato de error uniforme ([`src/lib/errors.js`](../src/lib/errors.js), [ADR 
 
 | Componente | Archivo | Estado |
 |---|---|---|
-| Routers Express | `src/routes/{eventos,compras,entradas,webhooks,internal}.js` | Entrega 2 (hoy, `src/lib/contrato.js` responde 501 en cada operación del contrato) |
+| Routers Express | `src/routes/{eventos,compras,entradas,webhooks,internal}.js` | Implementado |
 | Validación JWT y scope | [`src/middleware/auth0.js`](../src/middleware/auth0.js) | Implementado (`validateAccessToken`, `requireScope`) |
 | Validación x-api-key | [`src/middleware/apiKey.js`](../src/middleware/apiKey.js) | Implementado |
 | Verificación de firma HMAC | `src/middleware/webhookFirma.js` | Entrega 2 |

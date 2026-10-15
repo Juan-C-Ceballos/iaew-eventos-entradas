@@ -105,8 +105,3 @@ test('GET /eventos con un estado desconocido responde 400 VALIDATION_ERROR', asy
   assert.equal(res.status, 400);
   assert.equal((await res.json()).code, 'VALIDATION_ERROR');
 });
-
-test('las demás operaciones del contrato siguen respondiendo 501', async () => {
-  const res = await llamar('GET', '/entradas/ENT-7K2M9Q4XA1B3', { scope: 'validate:entradas' });
-  assert.equal(res.status, 501);
-});

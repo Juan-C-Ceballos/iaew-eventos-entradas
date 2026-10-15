@@ -6,16 +6,16 @@ const HTTP_METHODS = ['get', 'post', 'put', 'patch', 'delete'];
 
 const openapi = JSON.parse(fs.readFileSync(OPENAPI_PATH, 'utf8'));
 
+// `/compras/{id}/pagar` → `/compras/:id/pagar`
 function toExpressPath(openapiPath) {
   return openapiPath.replace(/\{([^}]+)\}/g, ':$1');
 }
 
-function pendingRoutes(implementedPaths = []) {
-  return Object.entries(openapi.paths)
-    .filter(([openapiPath]) => !implementedPaths.includes(openapiPath))
-    .flatMap(([openapiPath, item]) => HTTP_METHODS
-      .filter((method) => item[method])
-      .map((method) => ({ method, expressPath: toExpressPath(openapiPath) })));
+// Todas las operaciones del contrato como `{ method, openapiPath, expressPath }`.
+function operaciones() {
+  return Object.entries(openapi.paths).flatMap(([openapiPath, item]) => HTTP_METHODS
+    .filter((method) => item[method])
+    .map((method) => ({ method, openapiPath, expressPath: toExpressPath(openapiPath) })));
 }
 
-module.exports = { openapi, pendingRoutes, toExpressPath };
+module.exports = { openapi, operaciones, toExpressPath };

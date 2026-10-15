@@ -48,12 +48,6 @@ test('GET /token-info sin token responde 401 TOKEN_INVALID', async () => {
   assertError(await res.json(), 'TOKEN_INVALID');
 });
 
-test('una operación del contrato aún no implementada responde 501', async () => {
-  const res = await fetch(`${base}/entradas/ENT-7K2M9Q4XA1B3/validar`, { method: 'POST' });
-  assert.equal(res.status, 501);
-  assertError(await res.json(), 'NOT_IMPLEMENTED');
-});
-
 test('una ruta fuera del contrato responde 404 ROUTE_NOT_FOUND', async () => {
   const res = await fetch(`${base}/no-existe`);
   assert.equal(res.status, 404);
