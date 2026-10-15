@@ -13,8 +13,12 @@
     "migrate:down": "migrate-mongo down",
     "seed": "node scripts/seed.js",
     "test": "node --test",
-    "check": "node --check src/app.js && node --check src/worker.js && node --check scripts/seed.js && node --check services/pagos-mock/server.js",
-    "lint:openapi": "npx --yes @redocly/cli@1 lint docs/openapi.json"
+    "check": "node --check src/app.js && node --check src/worker.js && node --check scripts/seed.js && node --check scripts/emisor-local.js && node --check services/pagos-mock/server.js && node --check postman/generar-coleccion.js && node --check carga/generar-plan.js && node --check carga/ejecutar.js",
+    "lint:openapi": "npx --yes @redocly/cli@1 lint docs/openapi.json",
+    "postman": "newman run postman/iaew-eventos-entradas.postman_collection.json -e postman/pruebas.postman_environment.json",
+    "postman:generar": "node postman/generar-coleccion.js",
+    "carga": "node carga/ejecutar.js",
+    "carga:generar": "node carga/generar-plan.js"
   },
   "dependencies": {
     "ajv": "^8.17.1",
@@ -30,6 +34,7 @@
     "swagger-ui-express": "^5.0.1"
   },
   "devDependencies": {
+    "newman": "^6.2.3",
     "nodemon": "^3.1.9"
   },
   "engines": {

@@ -1,0 +1,3801 @@
+{
+  "info": {
+    "name": "IAEW 2026 — Eventos y Entradas",
+    "description": "Colección ejecutable del TPI: recorre la API de punta a punta y verifica cada respuesta con pm.test.\n\n**Ambientes:** `local` (API en localhost, tokens de Auth0), `pruebas` (API en localhost con el emisor OAuth local de docker-compose.pruebas.yml) y `docker` (corriendo dentro de la red de Compose).\n**Tokens:** se piden por `client_credentials` una sola vez por rol y se reutilizan. Las credenciales salen del ambiente y nunca se commitean (en `local` están vacías).\n**Ejecución:** `npx newman run postman/iaew-eventos-entradas.postman_collection.json -e postman/pruebas.postman_environment.json`.\n**Orden:** las carpetas dependen unas de otras (usan el evento y la compra creados antes): correr la colección completa.\n\nSe genera con `node postman/generar-coleccion.js`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Variables de ejecución: fechas y claves nuevas en cada corrida.",
+          "if (!pm.collectionVariables.get('fechaFutura')) {",
+          "  pm.collectionVariables.set('fechaFutura', new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString());",
+          "}",
+          "// Tokens (client_credentials): uno por rol, reutilizado hasta 60 s antes de vencer. Pedir un token por",
+          "// request agotaría el cupo de tokens de Auth0 y no es lo que haría un cliente real.",
+          "const base = pm.environment.get('auth0BaseUrl') || pm.collectionVariables.get('auth0BaseUrl');",
+          "const audience = pm.environment.get('audience') || pm.collectionVariables.get('audience');",
+          "pm.collectionVariables.set('audience', audience);",
+          "const roles = [['organizador', 'clientIdOrganizador', 'clientSecretOrganizador'], ['canal', 'clientIdCanal', 'clientSecretCanal'], ['control', 'clientIdControl', 'clientSecretControl']];",
+          "roles.forEach(function (rol) {",
+          "  const vence = Number(pm.collectionVariables.get('token_' + rol[0] + '_exp') || 0);",
+          "  if (Date.now() < vence - 60000 && pm.collectionVariables.get('token_' + rol[0])) { return; }",
+          "  pm.sendRequest({",
+          "    url: base + '/oauth/token', method: 'POST', header: { 'Content-Type': 'application/json' },",
+          "    body: { mode: 'raw', raw: JSON.stringify({ client_id: pm.environment.get(rol[1]), client_secret: pm.environment.get(rol[2]), audience: audience, grant_type: 'client_credentials' }) }",
+          "  }, function (error, respuesta) {",
+          "    if (error || respuesta.code !== 200) {",
+          "      throw new Error('No se pudo obtener el token de ' + rol[0] + ' (' + (error ? error.message : respuesta.code + ' ' + respuesta.text()) + '). Revisar auth0BaseUrl, audience y las credenciales del ambiente.');",
+          "    }",
+          "    const t = respuesta.json();",
+          "    pm.collectionVariables.set('token_' + rol[0], t.access_token);",
+          "    pm.collectionVariables.set('token_' + rol[0] + '_exp', String(Date.now() + t.expires_in * 1000));",
+          "  });",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "audience",
+      "value": "https://iaew-eventos-api"
+    },
+    {
+      "key": "webhookSecret",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "00 Seguridad: OAuth 2.0, scopes y x-api-key",
+      "description": "Token por client_credentials (se obtiene una vez y se reutiliza), 401 sin token, 403 sin el scope y la x-api-key como comparación (no reemplaza a OAuth).",
+      "item": [
+        {
+          "name": "GET /health (pública)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('200 y status ok', function () { pm.response.to.have.status(200); pm.expect(cuerpo().status).to.eql('ok'); });",
+                  "pm.test('devuelve X-Correlation-Id', function () { pm.expect(pm.response.headers.get('X-Correlation-Id')).to.be.a('string').and.not.empty; });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /token-info con token del organizador",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('200 con issuer, audience, scopes y vigencia', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "  const t = cuerpo();",
+                  "  pm.expect(t.audience).to.include(pm.collectionVariables.get('audience'));",
+                  "  pm.expect(t.scopes.split(' ')).to.have.members(['read:eventos', 'write:eventos', 'admin:eventos']);",
+                  "  pm.expect(t.expiresInSeconds).to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_organizador}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/token-info",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "token-info"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /token-info sin token → 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(401, 'TOKEN_INVALID');",
+                  "pm.test('incluye WWW-Authenticate: Bearer', function () { pm.expect(pm.response.headers.get('WWW-Authenticate')).to.match(/^Bearer/); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/token-info",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "token-info"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /token-info con un token inventado → 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(401, 'TOKEN_INVALID');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer eyJhbGciOiJSUzI1NiJ9.e30.firma-falsa"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/token-info",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "token-info"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /eventos con el token del canal de venta → 403 SCOPE_REQUIRED",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(403, 'SCOPE_REQUIRED');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/eventos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "eventos"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /internal/reportes/ventas sin x-api-key → 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(401, 'API_KEY_INVALID');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/internal/reportes/ventas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "internal",
+                "reportes",
+                "ventas"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /internal/reportes/ventas con un token OAuth → 401 (no reemplaza a la x-api-key)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(401, 'API_KEY_INVALID');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_organizador}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/internal/reportes/ventas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "internal",
+                "reportes",
+                "ventas"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "01 Eventos: CRUD (organizador)",
+      "description": "Crear, validar, publicar, modificar la capacidad (mueve el cupo) y listar.",
+      "item": [
+        {
+          "name": "POST /eventos (borrador)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('201, borrador, cupo = capacidad y Location', function () {",
+                  "  pm.response.to.have.status(201);",
+                  "  const e = cuerpo();",
+                  "  pm.expect(e.estado).to.eql('borrador');",
+                  "  pm.expect(e.cupoDisponible).to.eql(6);",
+                  "  pm.expect(e).to.not.have.property('__v');",
+                  "  pm.expect(pm.response.headers.get('Location')).to.eql('/eventos/' + e._id);",
+                  "});",
+                  "pm.collectionVariables.set(\"eventoId\", cuerpo()._id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_organizador}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"Evento de prueba (Newman)\",\n  \"descripcion\": \"Creado por la colección de Postman\",\n  \"fecha\": \"{{fechaFutura}}\",\n  \"lugar\": \"Sala de pruebas — Córdoba\",\n  \"capacidad\": 6,\n  \"precio\": 25000\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/eventos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "eventos"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /eventos con fecha pasada → 400 VALIDATION_ERROR",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(400, 'VALIDATION_ERROR');",
+                  "pm.test('details indica el campo fecha', function () { pm.expect(cuerpo().details.fecha).to.be.a('string'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_organizador}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"Evento de prueba (Newman)\",\n  \"descripcion\": \"Creado por la colección de Postman\",\n  \"fecha\": \"2020-01-01T10:00:00.000Z\",\n  \"lugar\": \"Sala de pruebas — Córdoba\",\n  \"capacidad\": 6,\n  \"precio\": 25000\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/eventos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "eventos"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /eventos con datos inválidos → 400 con details por campo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(400, 'VALIDATION_ERROR');",
+                  "pm.test('details lista los campos inválidos', function () { pm.expect(Object.keys(cuerpo().details)).to.include.members(['nombre', 'capacidad', 'extra', 'fecha', 'lugar', 'precio']); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_organizador}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"nombre\": \"\", \"capacidad\": 0, \"extra\": true }",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/eventos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "eventos"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /eventos/{id} con un id mal formado → 400 INVALID_ID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(400, 'INVALID_ID');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/eventos/abc",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "eventos",
+                "abc"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /eventos/{id} (canal de venta, read:eventos)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('200 y es el evento creado', function () { pm.response.to.have.status(200); pm.expect(cuerpo()._id).to.eql(pm.collectionVariables.get('eventoId')); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/eventos/{{eventoId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "eventos",
+                "{{eventoId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "PATCH /eventos/{id} publica el evento",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('200 y publicado', function () { pm.response.to.have.status(200); pm.expect(cuerpo().estado).to.eql('publicado'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_organizador}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"estado\": \"publicado\" }",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/eventos/{{eventoId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "eventos",
+                "{{eventoId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "PATCH /eventos/{id} con estado cancelado → 400 (se cancela con POST /cancelar)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(400, 'VALIDATION_ERROR');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_organizador}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"estado\": \"cancelado\" }",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/eventos/{{eventoId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "eventos",
+                "{{eventoId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "PATCH /eventos/{id} sube la capacidad y el cupo la acompaña",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('capacidad 8 y cupo 8', function () { pm.response.to.have.status(200); pm.expect(cuerpo().capacidad).to.eql(8); pm.expect(cuerpo().cupoDisponible).to.eql(8); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_organizador}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"capacidad\": 8 }",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/eventos/{{eventoId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "eventos",
+                "{{eventoId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /eventos?estado=publicado",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('200 y lista el evento, ordenados por fecha', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "  const lista = cuerpo();",
+                  "  pm.expect(lista.map(function (e) { return e._id; })).to.include(pm.collectionVariables.get('eventoId'));",
+                  "  const fechas = lista.map(function (e) { return e.fecha; });",
+                  "  pm.expect(fechas).to.eql(fechas.slice().sort());",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/eventos?estado=publicado",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "eventos"
+              ],
+              "query": [
+                {
+                  "key": "estado",
+                  "value": "publicado"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 Compra de punta a punta (canal de venta)",
+      "description": "Reservar (cupo atómico + Idempotency-Key) → pagar (pasarela simulada) → webhook firmado → RabbitMQ → worker → entradas emitidas.",
+      "item": [
+        {
+          "name": "POST /compras sin Idempotency-Key → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(400, 'IDEMPOTENCY_KEY_REQUIRED');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventoId\": \"{{eventoId}}\",\n  \"cantidad\": 2,\n  \"asistente\": {\"nombre\":\"Ana Pérez\",\"email\":\"ana.perez@example.com\",\"documento\":\"40123456\"}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/compras",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "compras"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /compras reserva 2 entradas",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(\"claveCompra\", 'newman:' + pm.variables.replaceIn('{{$guid}}'));",
+                  "pm.collectionVariables.set(\"clavePago\", 'newman:' + pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('201, pendiente, total calculado por el servidor y sin datos internos', function () {",
+                  "  pm.response.to.have.status(201);",
+                  "  const r = cuerpo();",
+                  "  pm.expect(r.compra.estado).to.eql('pendiente');",
+                  "  pm.expect(r.compra.cantidad).to.eql(2);",
+                  "  pm.expect(r.compra.total).to.eql(50000);",
+                  "  pm.expect(r.compra.asistente.email).to.eql('ana.perez@example.com');",
+                  "  pm.expect(r.compra).to.not.have.any.keys('idempotencyKey', 'idempotencyFingerprint', 'emisionEvento');",
+                  "  pm.expect(r.idempotencia.replayed).to.eql(false);",
+                  "  pm.expect(pm.response.headers.get('Idempotency-Replayed')).to.eql('false');",
+                  "});",
+                  "pm.collectionVariables.set(\"compraId\", cuerpo().compra._id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{claveCompra}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventoId\": \"{{eventoId}}\",\n  \"cantidad\": 2,\n  \"asistente\": {\"nombre\":\"Ana Pérez\",\"email\":\"ana.perez@example.com\",\"documento\":\"40123456\"}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/compras",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "compras"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /compras repetida con la misma clave → replay, mismo resultado",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('201, replayed y la misma compra', function () {",
+                  "  pm.response.to.have.status(201);",
+                  "  pm.expect(cuerpo().idempotencia.replayed).to.eql(true);",
+                  "  pm.expect(pm.response.headers.get('Idempotency-Replayed')).to.eql('true');",
+                  "  pm.expect(cuerpo().compra._id).to.eql(pm.collectionVariables.get('compraId'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{claveCompra}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventoId\": \"{{eventoId}}\",\n  \"cantidad\": 2,\n  \"asistente\": {\"nombre\":\"Ana Pérez\",\"email\":\"ana.perez@example.com\",\"documento\":\"40123456\"}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/compras",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "compras"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /compras con la misma clave y otro cuerpo → 409 IDEMPOTENCY_KEY_MISMATCH",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(409, 'IDEMPOTENCY_KEY_MISMATCH');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{claveCompra}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventoId\": \"{{eventoId}}\",\n  \"cantidad\": 3,\n  \"asistente\": {\"nombre\":\"Ana Pérez\",\"email\":\"ana.perez@example.com\",\"documento\":\"40123456\"}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/compras",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "compras"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /eventos/{id}: la reserva descontó el cupo una sola vez",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('cupo 6 (8 − 2), no 4', function () { pm.expect(cuerpo().cupoDisponible).to.eql(6); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/eventos/{{eventoId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "eventos",
+                "{{eventoId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /compras/{id}/pagar (pago aprobado) → 202",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('202, pago_pendiente, con vencimiento y la referencia de la pasarela', function () {",
+                  "  pm.response.to.have.status(202);",
+                  "  const c = cuerpo().compra;",
+                  "  pm.expect(['pago_pendiente', 'pagada']).to.include(c.estado);",
+                  "  pm.expect(c.pagoExpiraEn).to.be.a('string');",
+                  "  pm.expect(c.pago.referenciaExterna).to.match(/^PAY-/);",
+                  "  pm.expect(c.pago).to.not.have.property('idempotencyKey');",
+                  "  pm.expect(pm.response.headers.get('X-Correlation-Id')).to.be.a('string');",
+                  "});",
+                  "pm.collectionVariables.set(\"referenciaPago\", cuerpo().compra.pago.referenciaExterna);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{clavePago}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"escenario\": \"aprobado\" }",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/compras/{{compraId}}/pagar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "compras",
+                "{{compraId}}",
+                "pagar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /compras/{id}/pagar repetida con la misma clave → 202 replay",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('202, replayed y la misma referencia (un solo cobro)', function () {",
+                  "  pm.response.to.have.status(202);",
+                  "  pm.expect(cuerpo().idempotencia.replayed).to.eql(true);",
+                  "  pm.expect(cuerpo().compra.pago.referenciaExterna).to.eql(pm.collectionVariables.get('referenciaPago'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{clavePago}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"escenario\": \"aprobado\" }",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/compras/{{compraId}}/pagar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "compras",
+                "{{compraId}}",
+                "pagar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /compras/{id}: espera el webhook (la compra queda pagada)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (Number(pm.collectionVariables.get('poll_n') || 0) > 0) { setTimeout(function () {}, 250); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "const n = Number(pm.collectionVariables.get('poll_n') || 0);",
+                  "const listo = (function () { try { return (function (c) { return c.estado === 'pagada'; })(cuerpo()); } catch (e) { return false; } })();",
+                  "if (!listo && n < 40) {",
+                  "  pm.collectionVariables.set('poll_n', n + 1);",
+                  "  (pm.execution && pm.execution.setNextRequest ? pm.execution.setNextRequest : postman.setNextRequest)(\"GET /compras/{id}: espera el webhook (la compra queda pagada)\");",
+                  "} else {",
+                  "  pm.collectionVariables.unset('poll_n');",
+                  "  pm.test('el efecto asincrónico se ve antes de 40 intentos (' + n + ' reintentos)', function () { pm.expect(listo).to.eql(true); });",
+                  "  pm.test('la pasarela notificó y la compra quedó pagada, sin exponer el outbox', function () {",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.estado).to.eql('pagada');",
+                  "    pm.expect(c.pago.estado).to.eql('aprobado');",
+                  "    pm.expect(c.emisionEstado).to.be.oneOf(['pendiente', 'emitida']);",
+                  "    pm.expect(c).to.not.have.any.keys('emisionEvento', 'emisionPublicadaEn');",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/compras/{{compraId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "compras",
+                "{{compraId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /compras/{id}/entradas: espera al worker (de [] a 2 entradas)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (Number(pm.collectionVariables.get('poll_n') || 0) > 0) { setTimeout(function () {}, 250); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "const n = Number(pm.collectionVariables.get('poll_n') || 0);",
+                  "const listo = (function () { try { return (function (e) { return e.length === 2; })(cuerpo()); } catch (e) { return false; } })();",
+                  "if (!listo && n < 40) {",
+                  "  pm.collectionVariables.set('poll_n', n + 1);",
+                  "  (pm.execution && pm.execution.setNextRequest ? pm.execution.setNextRequest : postman.setNextRequest)(\"GET /compras/{id}/entradas: espera al worker (de [] a 2 entradas)\");",
+                  "} else {",
+                  "  pm.collectionVariables.unset('poll_n');",
+                  "  pm.test('el efecto asincrónico se ve antes de 40 intentos (' + n + ' reintentos)', function () { pm.expect(listo).to.eql(true); });",
+                  "  pm.test('el worker emitió una entrada por unidad, con código único y titular sin email', function () {",
+                  "    const entradas = cuerpo();",
+                  "    pm.expect(entradas.map(function (e) { return e.numero; })).to.eql([1, 2]);",
+                  "    entradas.forEach(function (e) {",
+                  "      pm.expect(e.codigo).to.match(/^ENT-[A-Z0-9]{12}$/);",
+                  "      pm.expect(e.estado).to.eql('emitida');",
+                  "      pm.expect(e.titular).to.eql({ nombre: 'Ana Pérez', documento: '40123456' });",
+                  "    });",
+                  "    pm.expect(entradas[0].codigo).to.not.eql(entradas[1].codigo);",
+                  "  });",
+                  "  pm.collectionVariables.set(\"codigoEntrada\", cuerpo()[0].codigo);",
+                  "  pm.collectionVariables.set(\"codigoEntrada2\", cuerpo()[1].codigo);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/compras/{{compraId}}/entradas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "compras",
+                "{{compraId}}",
+                "entradas"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /compras/{id}: la emisión queda registrada",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('emisionEstado emitida', function () { pm.expect(cuerpo().emisionEstado).to.eql('emitida'); pm.expect(cuerpo().emitidaEn).to.be.a('string'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/compras/{{compraId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "compras",
+                "{{compraId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /compras (solo las del cliente) incluye la compra",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('200 y la lista incluye la compra, de la más nueva a la más vieja', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "  const lista = cuerpo();",
+                  "  pm.expect(lista.map(function (c) { return c._id; })).to.include(pm.collectionVariables.get('compraId'));",
+                  "  const fechas = lista.map(function (c) { return c.createdAt; });",
+                  "  pm.expect(fechas).to.eql(fechas.slice().sort().reverse());",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/compras",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "compras"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 Control de acceso (puerta del evento)",
+      "description": "Validar la entrada una sola vez y rechazar reingreso, otro evento e inexistentes.",
+      "item": [
+        {
+          "name": "GET /entradas/{codigo}",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('200, emitida y con el titular', function () { pm.response.to.have.status(200); pm.expect(cuerpo().estado).to.eql('emitida'); pm.expect(cuerpo().titular.documento).to.eql('40123456'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_control}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/entradas/{{codigoEntrada}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "entradas",
+                "{{codigoEntrada}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /entradas/{codigo}/validar en la puerta de otro evento → 409 TICKET_WRONG_EVENT",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(409, 'TICKET_WRONG_EVENT');",
+                  "pm.test('informa el evento de la entrada', function () { pm.expect(cuerpo().details.eventoEntrada).to.eql(pm.collectionVariables.get('eventoId')); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_control}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"eventoId\": \"66f0000000000000000000ff\" }",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/entradas/{{codigoEntrada}}/validar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "entradas",
+                "{{codigoEntrada}}",
+                "validar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /entradas/{codigo}/validar con el token del canal de venta → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(403, 'SCOPE_REQUIRED');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"eventoId\": \"{{eventoId}}\" }",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/entradas/{{codigoEntrada}}/validar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "entradas",
+                "{{codigoEntrada}}",
+                "validar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /entradas/{codigo}/validar → acceso permitido",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('200 acceso_permitido, usada y con quién la validó', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(cuerpo().resultado).to.eql('acceso_permitido');",
+                  "  pm.expect(cuerpo().entrada.estado).to.eql('usada');",
+                  "  pm.expect(cuerpo().entrada.validadaPor).to.match(/@clients$/);",
+                  "  pm.expect(cuerpo().entrada.usadaEn).to.be.a('string');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_control}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"eventoId\": \"{{eventoId}}\" }",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/entradas/{{codigoEntrada}}/validar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "entradas",
+                "{{codigoEntrada}}",
+                "validar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /entradas/{codigo}/validar otra vez → 409 TICKET_ALREADY_USED",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(409, 'TICKET_ALREADY_USED');",
+                  "pm.test('informa cuándo se usó', function () { pm.expect(cuerpo().details.usadaEn).to.be.a('string'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_control}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"eventoId\": \"{{eventoId}}\" }",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/entradas/{{codigoEntrada}}/validar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "entradas",
+                "{{codigoEntrada}}",
+                "validar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /entradas/{codigo} inexistente → 404 TICKET_NOT_FOUND",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(404, 'TICKET_NOT_FOUND');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_control}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/entradas/ENT-ZZZZZZZZZZZZ",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "entradas",
+                "ENT-ZZZZZZZZZZZZ"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /entradas/{codigo}/validar con datos inválidos → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(400, 'VALIDATION_ERROR');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_control}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"eventoId\": \"no-es-un-id\" }",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/entradas/{{codigoEntrada2}}/validar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "entradas",
+                "{{codigoEntrada2}}",
+                "validar"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 Errores del dominio y webhook de pago",
+      "description": "Evento agotado, evento no publicado, pago rechazado (libera el cupo) y la integración por webhook: firma, anti-replay, duplicado y contradicción.",
+      "item": [
+        {
+          "name": "POST /eventos crea un evento de 1 lugar, ya publicado",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('201 publicado con 1 lugar', function () { pm.response.to.have.status(201); pm.expect(cuerpo().estado).to.eql('publicado'); pm.expect(cuerpo().cupoDisponible).to.eql(1); });",
+                  "pm.collectionVariables.set(\"eventoChicoId\", cuerpo()._id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_organizador}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"Evento de 1 lugar (Newman)\",\n  \"descripcion\": \"Creado por la colección de Postman\",\n  \"fecha\": \"{{fechaFutura}}\",\n  \"lugar\": \"Sala de pruebas — Córdoba\",\n  \"capacidad\": 1,\n  \"precio\": 25000,\n  \"estado\": \"publicado\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/eventos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "eventos"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /compras reserva el único lugar",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(\"claveChico1\", 'newman:' + pm.variables.replaceIn('{{$guid}}'));",
+                  "pm.collectionVariables.set(\"claveChico2\", 'newman:' + pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('201', function () { pm.response.to.have.status(201); });",
+                  "pm.collectionVariables.set(\"compraChicoId\", cuerpo().compra._id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{claveChico1}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventoId\": \"{{eventoChicoId}}\",\n  \"cantidad\": 1,\n  \"asistente\": {\"nombre\":\"Ana Pérez\",\"email\":\"ana.perez@example.com\",\"documento\":\"40123456\"}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/compras",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "compras"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /compras sobre un evento agotado → 409 EVENT_SOLD_OUT",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(409, 'EVENT_SOLD_OUT');",
+                  "pm.test('details: cupo 0 y solicitado 1', function () { pm.expect(cuerpo().details.cupoDisponible).to.eql(0); pm.expect(cuerpo().details.solicitado).to.eql(1); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{claveChico2}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventoId\": \"{{eventoChicoId}}\",\n  \"cantidad\": 1,\n  \"asistente\": {\"nombre\":\"Ana Pérez\",\"email\":\"ana.perez@example.com\",\"documento\":\"40123456\"}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/compras",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "compras"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /eventos crea un evento en borrador",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('201 borrador', function () { pm.response.to.have.status(201); });",
+                  "pm.collectionVariables.set(\"eventoBorradorId\", cuerpo()._id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_organizador}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"Evento en borrador (Newman)\",\n  \"descripcion\": \"Creado por la colección de Postman\",\n  \"fecha\": \"{{fechaFutura}}\",\n  \"lugar\": \"Sala de pruebas — Córdoba\",\n  \"capacidad\": 6,\n  \"precio\": 25000\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/eventos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "eventos"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /compras sobre un evento en borrador → 409 EVENT_NOT_PUBLISHED",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(\"claveBorrador\", 'newman:' + pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(409, 'EVENT_NOT_PUBLISHED');",
+                  "pm.test('details: estado borrador', function () { pm.expect(cuerpo().details.estado).to.eql('borrador'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{claveBorrador}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventoId\": \"{{eventoBorradorId}}\",\n  \"cantidad\": 1,\n  \"asistente\": {\"nombre\":\"Ana Pérez\",\"email\":\"ana.perez@example.com\",\"documento\":\"40123456\"}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/compras",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "compras"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /compras reserva 1 entrada para el pago que va a ser rechazado",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(\"claveRechazo\", 'newman:' + pm.variables.replaceIn('{{$guid}}'));",
+                  "pm.collectionVariables.set(\"clavePagoRechazo\", 'newman:' + pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('201', function () { pm.response.to.have.status(201); });",
+                  "pm.collectionVariables.set(\"compraRechazadaId\", cuerpo().compra._id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{claveRechazo}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventoId\": \"{{eventoId}}\",\n  \"cantidad\": 1,\n  \"asistente\": {\"nombre\":\"Ana Pérez\",\"email\":\"ana.perez@example.com\",\"documento\":\"40123456\"}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/compras",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "compras"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /compras/{id}/pagar con escenario rechazado → 202",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('202 (el resultado llega por webhook)', function () { pm.response.to.have.status(202); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{clavePagoRechazo}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"escenario\": \"rechazado\" }",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/compras/{{compraRechazadaId}}/pagar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "compras",
+                "{{compraRechazadaId}}",
+                "pagar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /compras/{id}: espera el webhook (la compra queda rechazada)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (Number(pm.collectionVariables.get('poll_n') || 0) > 0) { setTimeout(function () {}, 250); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "const n = Number(pm.collectionVariables.get('poll_n') || 0);",
+                  "const listo = (function () { try { return (function (c) { return c.estado === 'rechazada'; })(cuerpo()); } catch (e) { return false; } })();",
+                  "if (!listo && n < 40) {",
+                  "  pm.collectionVariables.set('poll_n', n + 1);",
+                  "  (pm.execution && pm.execution.setNextRequest ? pm.execution.setNextRequest : postman.setNextRequest)(\"GET /compras/{id}: espera el webhook (la compra queda rechazada)\");",
+                  "} else {",
+                  "  pm.collectionVariables.unset('poll_n');",
+                  "  pm.test('el efecto asincrónico se ve antes de 40 intentos (' + n + ' reintentos)', function () { pm.expect(listo).to.eql(true); });",
+                  "  pm.test('rechazada, con el motivo y sin evento de emisión', function () {",
+                  "    pm.expect(cuerpo().estado).to.eql('rechazada');",
+                  "    pm.expect(cuerpo().pago.estado).to.eql('rechazado');",
+                  "    pm.expect(cuerpo().pago.motivoRechazo).to.eql('fondos_insuficientes');",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/compras/{{compraRechazadaId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "compras",
+                "{{compraRechazadaId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /eventos/{id}: el rechazo devolvió el cupo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('el cupo volvió a 6', function () { pm.expect(cuerpo().cupoDisponible).to.eql(6); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/eventos/{{eventoId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "eventos",
+                "{{eventoId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /webhooks/pagos con firma inválida → 401 WEBHOOK_SIGNATURE_INVALID",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const compraId = pm.collectionVariables.get(\"compraId\");",
+                  "const notificacion = {",
+                  "  notificacionId: pm.variables.replaceIn('{{$guid}}'),",
+                  "  type: \"pago.aprobado\",",
+                  "  occurredAt: new Date().toISOString(),",
+                  "  data: { compraId: compraId, referenciaExterna: \"PAY-falso\", monto: 50000 }",
+                  "};",
+                  "const crudo = JSON.stringify(notificacion);",
+                  "const timestamp = String(Math.floor(Date.now() / 1000) + (0));",
+                  "const firma = 'sha256=' + '0'.repeat(64);",
+                  "pm.request.body.update(crudo);",
+                  "pm.request.headers.upsert({ key: 'X-Pago-Timestamp', value: timestamp });",
+                  "pm.request.headers.upsert({ key: 'X-Pago-Firma', value: firma });"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(401, 'WEBHOOK_SIGNATURE_INVALID');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/pagos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks",
+                "pagos"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /webhooks/pagos con la firma válida pero un timestamp viejo → 401 WEBHOOK_TIMESTAMP_EXPIRED",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const compraId = pm.collectionVariables.get(\"compraId\");",
+                  "const notificacion = {",
+                  "  notificacionId: pm.variables.replaceIn('{{$guid}}'),",
+                  "  type: \"pago.aprobado\",",
+                  "  occurredAt: new Date().toISOString(),",
+                  "  data: { compraId: compraId, referenciaExterna: \"PAY-viejo\", monto: 50000 }",
+                  "};",
+                  "const crudo = JSON.stringify(notificacion);",
+                  "const timestamp = String(Math.floor(Date.now() / 1000) + (-3600));",
+                  "const firma = 'sha256=' + CryptoJS.HmacSHA256(timestamp + '.' + crudo, pm.environment.get('webhookSecret') || pm.collectionVariables.get('webhookSecret')).toString(CryptoJS.enc.Hex);",
+                  "pm.request.body.update(crudo);",
+                  "pm.request.headers.upsert({ key: 'X-Pago-Timestamp', value: timestamp });",
+                  "pm.request.headers.upsert({ key: 'X-Pago-Firma', value: firma });"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(401, 'WEBHOOK_TIMESTAMP_EXPIRED');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/pagos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks",
+                "pagos"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /webhooks/pagos repetido sobre una compra pagada → 200 duplicado",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const compraId = pm.collectionVariables.get(\"compraId\");",
+                  "const notificacion = {",
+                  "  notificacionId: pm.variables.replaceIn('{{$guid}}'),",
+                  "  type: \"pago.aprobado\",",
+                  "  occurredAt: new Date().toISOString(),",
+                  "  data: { compraId: compraId, referenciaExterna: pm.collectionVariables.get(\"referenciaPago\"), monto: 50000 }",
+                  "};",
+                  "const crudo = JSON.stringify(notificacion);",
+                  "const timestamp = String(Math.floor(Date.now() / 1000) + (0));",
+                  "const firma = 'sha256=' + CryptoJS.HmacSHA256(timestamp + '.' + crudo, pm.environment.get('webhookSecret') || pm.collectionVariables.get('webhookSecret')).toString(CryptoJS.enc.Hex);",
+                  "pm.request.body.update(crudo);",
+                  "pm.request.headers.upsert({ key: 'X-Pago-Timestamp', value: timestamp });",
+                  "pm.request.headers.upsert({ key: 'X-Pago-Firma', value: firma });"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('200 con duplicado:true y sin efectos', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(cuerpo()).to.eql({ recibido: true, duplicado: true, compraId: pm.collectionVariables.get('compraId'), estadoCompra: 'pagada' });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/pagos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks",
+                "pagos"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /webhooks/pagos rechazado sobre una compra pagada → 409 PURCHASE_INVALID_STATE",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const compraId = pm.collectionVariables.get(\"compraId\");",
+                  "const notificacion = {",
+                  "  notificacionId: pm.variables.replaceIn('{{$guid}}'),",
+                  "  type: \"pago.rechazado\",",
+                  "  occurredAt: new Date().toISOString(),",
+                  "  data: { compraId: compraId, referenciaExterna: \"PAY-contradictorio\", monto: 50000, motivo: \"fondos_insuficientes\" }",
+                  "};",
+                  "const crudo = JSON.stringify(notificacion);",
+                  "const timestamp = String(Math.floor(Date.now() / 1000) + (0));",
+                  "const firma = 'sha256=' + CryptoJS.HmacSHA256(timestamp + '.' + crudo, pm.environment.get('webhookSecret') || pm.collectionVariables.get('webhookSecret')).toString(CryptoJS.enc.Hex);",
+                  "pm.request.body.update(crudo);",
+                  "pm.request.headers.upsert({ key: 'X-Pago-Timestamp', value: timestamp });",
+                  "pm.request.headers.upsert({ key: 'X-Pago-Firma', value: firma });"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(409, 'PURCHASE_INVALID_STATE');",
+                  "pm.test('details: sigue pagada', function () { pm.expect(cuerpo().details.estado).to.eql('pagada'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/pagos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks",
+                "pagos"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /webhooks/pagos de una compra inexistente → 404 PURCHASE_NOT_FOUND",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(\"compraInexistenteId\", '6702a1b2c3d4e5f6012345ff');",
+                  "const compraId = pm.collectionVariables.get(\"compraInexistenteId\");",
+                  "const notificacion = {",
+                  "  notificacionId: pm.variables.replaceIn('{{$guid}}'),",
+                  "  type: \"pago.aprobado\",",
+                  "  occurredAt: new Date().toISOString(),",
+                  "  data: { compraId: compraId, referenciaExterna: \"PAY-nada\", monto: 50000 }",
+                  "};",
+                  "const crudo = JSON.stringify(notificacion);",
+                  "const timestamp = String(Math.floor(Date.now() / 1000) + (0));",
+                  "const firma = 'sha256=' + CryptoJS.HmacSHA256(timestamp + '.' + crudo, pm.environment.get('webhookSecret') || pm.collectionVariables.get('webhookSecret')).toString(CryptoJS.enc.Hex);",
+                  "pm.request.body.update(crudo);",
+                  "pm.request.headers.upsert({ key: 'X-Pago-Timestamp', value: timestamp });",
+                  "pm.request.headers.upsert({ key: 'X-Pago-Firma', value: firma });"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(404, 'PURCHASE_NOT_FOUND');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/pagos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks",
+                "pagos"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 Cancelaciones y cascada",
+      "description": "Cancelar una reserva (libera el cupo, idempotente), no cancelar una compra pagada y cancelar un evento con ventas.",
+      "item": [
+        {
+          "name": "POST /compras reserva 1 entrada para cancelar",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(\"claveCancelar\", 'newman:' + pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('201', function () { pm.response.to.have.status(201); });",
+                  "pm.collectionVariables.set(\"compraCancelarId\", cuerpo().compra._id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{claveCancelar}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventoId\": \"{{eventoId}}\",\n  \"cantidad\": 1,\n  \"asistente\": {\"nombre\":\"Ana Pérez\",\"email\":\"ana.perez@example.com\",\"documento\":\"40123456\"}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/compras",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "compras"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /compras/{id}/cancelar libera el cupo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('200 cancelada', function () { pm.response.to.have.status(200); pm.expect(cuerpo().estado).to.eql('cancelada'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/compras/{{compraCancelarId}}/cancelar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "compras",
+                "{{compraCancelarId}}",
+                "cancelar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /compras/{id}/cancelar otra vez → 200 (idempotente)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('200 y sigue cancelada', function () { pm.response.to.have.status(200); pm.expect(cuerpo().estado).to.eql('cancelada'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/compras/{{compraCancelarId}}/cancelar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "compras",
+                "{{compraCancelarId}}",
+                "cancelar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /eventos/{id}: el cupo se liberó una sola vez",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('cupo 6', function () { pm.expect(cuerpo().cupoDisponible).to.eql(6); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/eventos/{{eventoId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "eventos",
+                "{{eventoId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /compras/{id}/cancelar sobre una compra pagada → 409 PURCHASE_INVALID_STATE",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(409, 'PURCHASE_INVALID_STATE');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/compras/{{compraId}}/cancelar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "compras",
+                "{{compraId}}",
+                "cancelar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /compras/{id}/pagar sobre una compra cancelada → 409",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(\"clavePagoCancelada\", 'newman:' + pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(409, 'PURCHASE_INVALID_STATE');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{clavePagoCancelada}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/compras/{{compraCancelarId}}/pagar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "compras",
+                "{{compraCancelarId}}",
+                "pagar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "DELETE /eventos/{id} de un evento con ventas → 409 EVENT_HAS_SALES",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(409, 'EVENT_HAS_SALES');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_organizador}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/eventos/{{eventoId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "eventos",
+                "{{eventoId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "DELETE /eventos/{id} con el scope write (sin admin) → 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(403, 'SCOPE_REQUIRED');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/eventos/{{eventoBorradorId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "eventos",
+                "{{eventoBorradorId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /eventos/{id}/cancelar cancela el evento con ventas",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('200 cancelado (corta las ventas al instante)', function () { pm.response.to.have.status(200); pm.expect(cuerpo().estado).to.eql('cancelado'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_organizador}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/eventos/{{eventoId}}/cancelar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "eventos",
+                "{{eventoId}}",
+                "cancelar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /compras/{id}/entradas: la cascada anula la entrada sin usar",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (Number(pm.collectionVariables.get('poll_n') || 0) > 0) { setTimeout(function () {}, 250); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "const n = Number(pm.collectionVariables.get('poll_n') || 0);",
+                  "const listo = (function () { try { return (function (e) { return e.length === 2 && e.every(function (x) { return x.estado !== 'emitida'; }); })(cuerpo()); } catch (e) { return false; } })();",
+                  "if (!listo && n < 40) {",
+                  "  pm.collectionVariables.set('poll_n', n + 1);",
+                  "  (pm.execution && pm.execution.setNextRequest ? pm.execution.setNextRequest : postman.setNextRequest)(\"GET /compras/{id}/entradas: la cascada anula la entrada sin usar\");",
+                  "} else {",
+                  "  pm.collectionVariables.unset('poll_n');",
+                  "  pm.test('el efecto asincrónico se ve antes de 40 intentos (' + n + ' reintentos)', function () { pm.expect(listo).to.eql(true); });",
+                  "  pm.test('la usada no se toca y la otra queda anulada', function () {",
+                  "    pm.expect(cuerpo().map(function (e) { return e.estado; })).to.eql(['usada', 'anulada']);",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/compras/{{compraId}}/entradas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "compras",
+                "{{compraId}}",
+                "entradas"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /compras/{id}: la compra pagada queda con reembolsoPendiente",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('sigue pagada y marcada para reembolso (no hay reembolso real)', function () { pm.expect(cuerpo().estado).to.eql('pagada'); pm.expect(cuerpo().reembolsoPendiente).to.eql(true); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_canal}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/compras/{{compraId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "compras",
+                "{{compraId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /entradas/{codigo}/validar en un evento cancelado → 409 EVENT_NOT_ACTIVE",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(409, 'EVENT_NOT_ACTIVE');",
+                  "pm.test('details: cancelado', function () { pm.expect(cuerpo().details.estado).to.eql('cancelado'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_control}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"eventoId\": \"{{eventoId}}\" }",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/entradas/{{codigoEntrada2}}/validar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "entradas",
+                "{{codigoEntrada2}}",
+                "validar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /eventos/{id}/cancelar otra vez → 200 (idempotente)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('200 y sigue cancelado', function () { pm.response.to.have.status(200); pm.expect(cuerpo().estado).to.eql('cancelado'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_organizador}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/eventos/{{eventoId}}/cancelar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "eventos",
+                "{{eventoId}}",
+                "cancelar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /eventos/{id}/cancelar sobre un borrador → 409 INVALID_STATE_TRANSITION",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(409, 'INVALID_STATE_TRANSITION');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_organizador}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/eventos/{{eventoBorradorId}}/cancelar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "eventos",
+                "{{eventoBorradorId}}",
+                "cancelar"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 Reporte interno (x-api-key)",
+      "description": "Endpoint de comparación protegido con una clave estática.",
+      "item": [
+        {
+          "name": "GET /internal/reportes/ventas con x-api-key",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('200 con las ventas del evento de la prueba', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "  const r = cuerpo();",
+                  "  pm.expect(new Date(r.generadoEn).toString()).to.not.eql('Invalid Date');",
+                  "  const e = r.eventos.filter(function (x) { return x.eventoId === pm.collectionVariables.get('eventoId'); })[0];",
+                  "  pm.expect(e).to.be.an('object');",
+                  "  pm.expect(e.entradasVendidas).to.eql(2);",
+                  "  pm.expect(e.recaudado).to.eql(50000);",
+                  "  pm.expect(e.capacidad).to.eql(8);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/internal/reportes/ventas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "internal",
+                "reportes",
+                "ventas"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "99 Limpieza",
+      "description": "Borra el evento en borrador (sin ventas). Los eventos con compras no se pueden borrar: se cancelan.",
+      "item": [
+        {
+          "name": "DELETE /eventos/{id} del borrador (admin:eventos)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('204 sin cuerpo', function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_organizador}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/eventos/{{eventoBorradorId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "eventos",
+                "{{eventoBorradorId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /eventos/{id} del evento borrado → 404 EVENT_NOT_FOUND",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "esError(404, 'EVENT_NOT_FOUND');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_organizador}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/eventos/{{eventoBorradorId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "eventos",
+                "{{eventoBorradorId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /eventos/{id}/cancelar del evento de 1 lugar",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "// Un error de la API siempre tiene el formato { error, code, retryable, action } (ADR 0001).",
+                  "const esError = (estado, codigo) => {",
+                  "  pm.test('responde ' + estado + ' ' + codigo, function () {",
+                  "    pm.response.to.have.status(estado);",
+                  "    const c = cuerpo();",
+                  "    pm.expect(c.code).to.eql(codigo);",
+                  "    pm.expect(c).to.include.all.keys('error', 'code', 'retryable', 'action');",
+                  "    pm.expect(c.retryable).to.be.a('boolean');",
+                  "  });",
+                  "};",
+                  "pm.test('200 cancelado', function () { pm.response.to.have.status(200); pm.expect(cuerpo().estado).to.eql('cancelado'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_organizador}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/eventos/{{eventoChicoId}}/cancelar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "eventos",
+                "{{eventoChicoId}}",
+                "cancelar"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

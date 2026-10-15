@@ -1,0 +1,33 @@
+# Override SOLO para pruebas locales y CI: reemplaza a Auth0 por un emisor OAuth local (scripts/emisor-local.js),
+# así la colección de Postman corre de punta a punta sin un tenant de Auth0 ni secretos.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.pruebas.yml up -d --build
+#
+# No se usa para la demo ni para desplegar: ahí la API valida los tokens que emite Auth0.
+services:
+  emisor-local:
+    build: .
+    image: iaew-eventos-entradas:local
+    command: ["node", "scripts/emisor-local.js"]
+    restart: unless-stopped
+    ports:
+      - "4010:4010"
+    environment:
+      PORT: 4010
+      # El issuer que firman los tokens es el nombre que la api usa para llegar al emisor dentro de la red de Compose.
+      EMISOR_ISSUER: http://emisor-local:4010
+      AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-https://iaew-eventos-api}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4010/.well-known/openid-configuration"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    environment:
+      AUTH0_ISSUER_URL: http://emisor-local:4010
+      # La librería de validación de JWT rechaza un issuer http:// cuando NODE_ENV=production.
+      NODE_ENV: development
+    depends_on:
+      emisor-local:
+        condition: service_healthy
