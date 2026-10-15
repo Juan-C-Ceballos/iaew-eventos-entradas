@@ -31,11 +31,20 @@ const barridoErrores = crearContador('barrido_errores_total', 'Pasos del barrido
 const RESULTADOS_VALIDACION = ['acceso_permitido', 'ya_usada', 'anulada', 'otro_evento', 'evento_inactivo', 'inexistente'];
 const MOTIVOS_PAGO_FALLIDO = ['rechazado', 'expirado', 'pasarela_no_disponible'];
 const RESULTADOS_MENSAJE = ['ok', 'duplicado', 'reintento', 'dlq'];
+const RAZONES_DLQ = ['invalid_json', 'contract_invalid', 'compra_not_found', 'compra_not_paid', 'max_retries_exceeded'];
+const ACCIONES_BARRIDO = [
+  'reservas_expiradas', 'pagos_conciliados_pagados', 'pagos_conciliados_rechazados', 'pagos_conciliados_expirados',
+  'eventos_finalizados', 'cancelaciones_completadas', 'cupo_corregido'
+];
+const PASOS_BARRIDO = ['reservasExpiradas', 'pagos', 'eventosFinalizados', 'cancelacionesCompletadas', 'cupo'];
 for (const resultado of RESULTADOS_VALIDACION) validaciones.inc({ resultado }, 0);
 for (const motivo of MOTIVOS_PAGO_FALLIDO) pagosFallidos.inc({ motivo }, 0);
 for (const resultado of RESULTADOS_MENSAJE) mensajes.inc({ resultado }, 0);
+for (const razon of RAZONES_DLQ) mensajesDlq.inc({ razon }, 0);
+for (const accion of ACCIONES_BARRIDO) barrido.inc({ accion }, 0);
+for (const paso of PASOS_BARRIDO) barridoErrores.inc({ paso }, 0);
 
 module.exports = {
   registro, httpDuracion, entradasVendidas, entradasEmitidas, validaciones, pagosFallidos, mensajes, mensajesDlq, barrido, barridoErrores,
-  RESULTADOS_VALIDACION, MOTIVOS_PAGO_FALLIDO
+  RESULTADOS_VALIDACION, MOTIVOS_PAGO_FALLIDO, RAZONES_DLQ, ACCIONES_BARRIDO, PASOS_BARRIDO
 };

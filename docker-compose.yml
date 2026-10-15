@@ -41,6 +41,7 @@ services:
     command: ["sh", "-c", "npm run migrate && npm run seed"]
     environment:
       MONGODB_URI: mongodb://mongodb:27017/iaew_eventos
+      SERVICE_NAME: db-init
     depends_on:
       mongodb:
         condition: service_healthy

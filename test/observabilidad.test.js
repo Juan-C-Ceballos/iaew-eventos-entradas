@@ -263,6 +263,9 @@ test('GET /metrics de la api devuelve el formato de Prometheus con las métricas
     }
     assert.match(texto, /validaciones_total\{resultado="acceso_permitido"\} \d+/, 'publicada en cero desde el arranque');
     assert.match(texto, /pagos_fallidos_total\{motivo="pasarela_no_disponible"\} \d+/);
+    // Los paneles de DLQ y barrido muestran series en cero antes del primer evento, no un panel vacío.
+    for (const razon of metricas.RAZONES_DLQ) assert.ok(texto.includes(`mensajes_dlq_total{razon="${razon}"} `), razon);
+    for (const accion of metricas.ACCIONES_BARRIDO) assert.ok(texto.includes(`barrido_acciones_total{accion="${accion}"} `), accion);
   } finally {
     await new Promise((resolve) => servidor.close(resolve));
   }
