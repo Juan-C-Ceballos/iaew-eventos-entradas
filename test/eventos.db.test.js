@@ -1,18 +1,15 @@
 const { test, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const { crearEmisor } = require('./helpers/emisor');
+const { configuracionMongo } = require('./helpers/mongo');
 
 // Integración contra MongoDB real: las garantías de atomicidad (updates condicionales) no se
-// pueden comprobar con dobles. Se omite sin MONGODB_URI_TEST, por ejemplo:
-//   docker compose up -d mongodb
-//   MONGODB_URI_TEST=mongodb://127.0.0.1:27017/iaew_eventos_test npm test
-// La base se vacía en cada prueba, por eso su nombre debe contener "test".
-const URI = process.env.MONGODB_URI_TEST;
-if (!URI) {
+// pueden comprobar con dobles. Se omite sin MONGODB_URI_TEST (ver helpers/mongo.js).
+const MONGO = configuracionMongo('eventos');
+if (!MONGO) {
   test('integración de eventos con MongoDB (definir MONGODB_URI_TEST para correrla)', { skip: true }, () => {});
   return;
 }
-if (!/test/i.test(new URL(URI).pathname)) throw new Error('MONGODB_URI_TEST debe apuntar a una base cuyo nombre contenga "test": se vacía en cada prueba');
 
 const mongoose = require('mongoose');
 
@@ -28,7 +25,7 @@ before(async () => {
   emisor = await crearEmisor();
   process.env.AUTH0_ISSUER_URL = emisor.url;
   process.env.AUTH0_AUDIENCE = emisor.audience;
-  await mongoose.connect(URI, { autoIndex: false });
+  await mongoose.connect(MONGO.uri, { dbName: MONGO.dbName, autoIndex: false });
   Evento = require('../src/models/Evento');
   Compra = require('../src/models/Compra');
   Entrada = require('../src/models/Entrada');

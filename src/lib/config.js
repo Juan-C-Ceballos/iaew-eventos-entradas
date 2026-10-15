@@ -15,10 +15,11 @@ function retryConfig() {
   };
 }
 
-// Plazos del ciclo de vida (ADR 0010): vencimiento del pago, cadencia del barrido del worker
-// y cuánto después de `fecha` un evento publicado pasa a `finalizado`.
+// Plazos del ciclo de vida (ADR 0007, 0010 y 0011): vencimiento de la reserva y del pago,
+// cadencia del barrido del worker y cuánto después de `fecha` un evento publicado pasa a `finalizado`.
 function plazosConfig() {
   return {
+    reservaTtlMinutos: integerFromEnv('RESERVA_TTL_MINUTOS', 15, { min: 1, max: 1440 }),
     pagoTimeoutMinutos: integerFromEnv('PAGO_TIMEOUT_MINUTOS', 30, { min: 1, max: 1440 }),
     barridoIntervaloMs: integerFromEnv('BARRIDO_INTERVALO_MS', 60000, { min: 1000, max: 3600000 }),
     eventoFinalizaTrasHoras: integerFromEnv('EVENTO_FINALIZA_TRAS_HORAS', 12, { min: 1, max: 168 })

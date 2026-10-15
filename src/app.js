@@ -5,6 +5,7 @@ const { connectDb, closeDb } = require('./db');
 const { validateAccessToken, manejarErrorAuth } = require('./middleware/auth0');
 const { sendError, manejarApiError } = require('./lib/errors');
 const eventosRouter = require('./routes/eventos');
+const comprasRouter = require('./routes/compras');
 const { openapi, pendingRoutes } = require('./lib/contrato');
 const { integerFromEnv, plazosConfig } = require('./lib/config');
 const { iniciarRelay } = require('./lib/outbox');
@@ -23,11 +24,16 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openapi));
 app.get('/token-info', validateAccessToken, (req, res) => res.json(describirToken(req.auth.payload)));
 
 app.use('/eventos', eventosRouter);
+app.use('/compras', comprasRouter);
 
 // Operaciones del contrato aún no implementadas: responden 501 en vez de 404 para que
 // el esqueleto refleje el contrato completo. Cada router real se monta antes que esto y su
 // ruta se agrega a la lista de implementadas.
-const RUTAS_IMPLEMENTADAS = ['/health', '/token-info', '/eventos', '/eventos/{id}', '/eventos/{id}/cancelar'];
+const RUTAS_IMPLEMENTADAS = [
+  '/health', '/token-info',
+  '/eventos', '/eventos/{id}', '/eventos/{id}/cancelar',
+  '/compras', '/compras/{id}', '/compras/{id}/cancelar', '/compras/{id}/entradas'
+];
 for (const { method, expressPath } of pendingRoutes(RUTAS_IMPLEMENTADAS)) {
   app[method](expressPath, (req, res) => sendError(res, 501, 'Operación documentada en el contrato y pendiente de implementación', 'NOT_IMPLEMENTED', false, 'Disponible en la Entrega 2; ver /api-docs'));
 }
