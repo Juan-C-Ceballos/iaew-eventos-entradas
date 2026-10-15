@@ -25,4 +25,15 @@ function plazosConfig() {
   };
 }
 
-module.exports = { integerFromEnv, retryConfig, plazosConfig };
+// Validación del access token. `AUTH0_ISSUER_URL` es opcional y existe para apuntar a un emisor
+// local en las pruebas; en el sistema real el issuer se deriva de `AUTH0_DOMAIN`. La librería
+// rechaza un issuer http:// cuando NODE_ENV=production.
+function auth0Config(env = process.env) {
+  return {
+    issuerBaseURL: env.AUTH0_ISSUER_URL || `https://${env.AUTH0_DOMAIN}`,
+    audience: env.AUTH0_AUDIENCE,
+    tokenSigningAlg: 'RS256'
+  };
+}
+
+module.exports = { integerFromEnv, retryConfig, plazosConfig, auth0Config };

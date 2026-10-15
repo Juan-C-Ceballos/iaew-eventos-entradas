@@ -17,6 +17,13 @@ test('los plazos se leen del entorno', () => {
   assert.deepEqual(plazosConfig(), { pagoTimeoutMinutos: 10, barridoIntervaloMs: 5000, eventoFinalizaTrasHoras: 6 });
 });
 
+test('el issuer de Auth0 se deriva del dominio y se puede reemplazar para las pruebas', () => {
+  const { auth0Config } = require('../src/lib/config');
+  const env = { AUTH0_DOMAIN: 'dev-xxxx.us.auth0.com', AUTH0_AUDIENCE: 'https://iaew-eventos-api' };
+  assert.deepEqual(auth0Config(env), { issuerBaseURL: 'https://dev-xxxx.us.auth0.com', audience: 'https://iaew-eventos-api', tokenSigningAlg: 'RS256' });
+  assert.equal(auth0Config({ ...env, AUTH0_ISSUER_URL: 'http://127.0.0.1:4010' }).issuerBaseURL, 'http://127.0.0.1:4010');
+});
+
 test('un plazo inválido falla al arrancar con un mensaje claro', () => {
   process.env.PAGO_TIMEOUT_MINUTOS = 'abc';
   assert.throws(() => plazosConfig(), /PAGO_TIMEOUT_MINUTOS debe ser un entero/);

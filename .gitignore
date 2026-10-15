@@ -27,3 +27,6 @@ Thumbs.db
 
 # Docker
 docker-compose.override.yml
+
+# Entregables generados con git archive
+*.zip

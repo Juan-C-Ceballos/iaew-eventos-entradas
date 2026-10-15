@@ -1,12 +1,9 @@
 require('dotenv').config();
 const { auth, requiredScopes, UnauthorizedError } = require('express-oauth2-jwt-bearer');
 const { sendError } = require('../lib/errors');
+const { auth0Config } = require('../lib/config');
 
-const validateAccessToken = auth({
-  issuerBaseURL: `https://${process.env.AUTH0_DOMAIN}`,
-  audience: process.env.AUTH0_AUDIENCE,
-  tokenSigningAlg: 'RS256'
-});
+const validateAccessToken = auth(auth0Config());
 
 function requireScope(scope) {
   return [validateAccessToken, requiredScopes(scope)];
