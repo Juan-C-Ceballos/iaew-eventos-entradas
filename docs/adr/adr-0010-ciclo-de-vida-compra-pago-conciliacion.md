@@ -48,6 +48,7 @@ El [ADR 0007](adr-0007-reserva-cupo-idempotencia.md) resuelve la reserva atómic
 
 - Ningún pago queda sin resolver: aprobado, rechazado o expirado, siempre hay una salida con una sola fuente de verdad (la pasarela).
 - Una caída de la pasarela retiene cupo hasta `PAGO_TIMEOUT_MINUTOS` (más que los 15 minutos de la reserva). Es el costo de no devolver la compra a `pendiente`.
+  El conjunto de patrones de resiliencia del sistema, y por qué no se agregó un circuit breaker para acotar este costo, está en el [ADR 0013](adr-0013-patrones-de-resiliencia.md).
 - El `worker` pasa a tener más responsabilidades (consumir, barrer, consultar la pasarela). Está reflejado en el [C4 de componentes](../c4-component.md).
 - El invariante `capacidad − cupoDisponible = reservadas + vendidas` deja de ser una esperanza: hay un proceso que lo vigila.
 - Cada pasada consulta MongoDB; los índices `{ estado, reservaExpiraEn }` y `{ estado, pagoExpiraEn }` la mantienen barata.

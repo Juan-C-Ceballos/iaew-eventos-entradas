@@ -31,6 +31,7 @@ Un organizador publica eventos con capacidad limitada. Un canal de venta compra 
 | Errores del dominio | `EVENT_SOLD_OUT`, `PAYMENT_REJECTED` (compra `rechazada`), `TICKET_ALREADY_USED`, `IDEMPOTENCY_KEY_MISMATCH` |
 | Logs JSON y dashboard | Logs de pino con correlation id; Prometheus + Grafana con p95, throughput y error rate |
 | Postman y prueba de carga | Colección ejecutable con Newman (72 peticiones) y plan de JMeter con su reporte |
+| Resiliencia | Idempotencia, outbox, retry con espera y DLQ, timeouts, conciliación y reconciliación del cupo: mapa falla → patrón → prueba en el [ADR 0013](docs/adr/adr-0013-patrones-de-resiliencia.md) |
 
 ## 3. Arquitectura en un vistazo
 
@@ -340,6 +341,7 @@ Stack: **Node.js 22 + Express 4 (CommonJS), MongoDB 7 + Mongoose 8, RabbitMQ 4.2
 | [0010](docs/adr/adr-0010-ciclo-de-vida-compra-pago-conciliacion.md) | Orden de `/pagar`, timeout de pago con conciliación y reconciliación de cupo |
 | [0011](docs/adr/adr-0011-ciclo-de-vida-evento.md) | Estados del evento, fechas, cierre automático y cancelación con cascada |
 | [0012](docs/adr/adr-0012-titularidad-trazabilidad-validacion.md) | `creadaPor`, idempotencia por cliente, asistente como snapshot y validación por evento |
+| [0013](docs/adr/adr-0013-patrones-de-resiliencia.md) | Patrones de resiliencia: qué falla, qué patrón la cubre y por qué no hay circuit breaker |
 
 ## 18. Limitaciones conocidas y mejoras futuras
 
@@ -353,6 +355,7 @@ Stack: **Node.js 22 + Express 4 (CommonJS), MongoDB 7 + Mongoose 8, RabbitMQ 4.2
 - El emisor OAuth local (`docker-compose.pruebas.yml`) es solo para pruebas: obliga a `NODE_ENV=development` en la API porque la librería de JWT rechaza un issuer `http://` en producción.
 - Las reservas abandonadas retienen cupo hasta que vencen (`RESERVA_TTL_MINUTOS`, 15 minutos por defecto), y un pago pendiente hasta que llega el resultado o vence `PAGO_TIMEOUT_MINUTOS` (30 minutos).
 - Si la pasarela cobra después de haber respondido "no conozco ese pago", la compra queda `expirada` con `reembolsoPendiente`: no hay reembolso real ([ADR 0010](docs/adr/adr-0010-ciclo-de-vida-compra-pago-conciliacion.md)).
+- No hay circuit breaker sobre la pasarela (decisión analizada en el [ADR 0013](docs/adr/adr-0013-patrones-de-resiliencia.md)): con la pasarela colgada, `/pagar` espera hasta 5 s por intento y puede dejar la compra en `pago_pendiente` hasta reintentar con la misma `Idempotency-Key` o hasta que la conciliación la resuelva.
 - No hay reembolsos: una compra `pagada` no se cancela. Si el evento se cancela, la compra queda con `reembolsoPendiente: true` y sus entradas `anuladas` ([ADR 0011](docs/adr/adr-0011-ciclo-de-vida-evento.md)).
 - Una entrada validada justo cuando se cancela el evento puede quedar `usada`: la cascada anula solo las `emitida` (la validación ya rechaza lo posterior con `EVENT_NOT_ACTIVE`).
 - La prueba de carga corrió con todo en una sola máquina y sin afinar nada (pool de MongoDB, procesos de la API, índices adicionales): sirve de punto de comparación, no mide capacidad.

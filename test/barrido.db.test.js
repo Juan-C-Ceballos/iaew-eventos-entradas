@@ -171,20 +171,24 @@ test('conciliación: 6 barridos simultáneos sobre el mismo pago aprobado lo reg
 test('conciliación: con la pasarela caída no se expira nada y el resto del barrido sigue', async () => {
   const evento = await crearEvento({ cupoDisponible: 5 });
   const sinRespuesta = await pagoVencido(evento);
+  const otraSinRespuesta = await pagoVencido(evento);
   const vencida = await insertarCompra(evento, { estado: 'pendiente', cantidad: 3, reservaExpiraEn: minutos(-5) });
   const puerto = await new Promise((resolve) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); }); });
   process.env.PAGOS_URL = `http://127.0.0.1:${puerto}`;
 
   const resultados = await pasada();
-  assert.equal(resultados.pagos.sinRespuesta, 1);
+  // El paso se corta en la primera consulta fallida: las dos compras quedan sin respuesta (ADR 0013).
+  assert.equal(resultados.pagos.sinRespuesta, 2);
   assert.equal((await compraDe(sinRespuesta)).estado, 'pago_pendiente', 'ante la duda no se concluye nada');
+  assert.equal((await compraDe(otraSinRespuesta)).estado, 'pago_pendiente');
   assert.equal((await compraDe(vencida)).estado, 'expirada', 'la reserva vencida se resolvió igual');
   assert.equal(await cupoDe(evento), 5 + 3);
 
-  // Cuando la pasarela vuelve y no conoce el pago, recién ahí expira.
+  // Cuando la pasarela vuelve y no conoce los pagos, recién ahí expiran.
   process.env.PAGOS_URL = urlPasarela;
-  assert.equal((await pasada()).pagos.expiradas, 1);
+  assert.equal((await pasada()).pagos.expiradas, 2);
   assert.equal((await compraDe(sinRespuesta)).estado, 'expirada');
+  assert.equal((await compraDe(otraSinRespuesta)).estado, 'expirada');
 });
 
 test('un pago aprobado que llega después de expirar queda marcado para reembolso', async () => {

@@ -152,3 +152,53 @@ test('iniciarBarrido corre una pasada inmediata y cada intervalo, y al detenerlo
   await new Promise((r) => setTimeout(r, 100));
   assert.equal(modelos.llamadas.eventosUpdateMany, alDetener, 'sin pasadas después de detener');
 });
+
+test('conciliación: si la pasarela no responde, el paso se corta en la primera compra y se registra un solo error', async () => {
+  const vencidas = [{ _id: 'c1' }, { _id: 'c2' }, { _id: 'c3' }];
+  const Compra = { find: () => consulta(vencidas) };
+  const log = sinLog();
+  const consultadas = [];
+  const consultar = async (id) => { consultadas.push(id); throw new Error('timeout'); };
+
+  const resumen = await barrido.conciliarPagosVencidos({ Compra, consultar, log, ahora: AHORA });
+  assert.deepEqual(consultadas, ['c1'], 'no se le pregunta por las demás: cada intento esperaría hasta el timeout');
+  assert.deepEqual(resumen, { pagadas: 0, rechazadas: 0, expiradas: 0, pendientes: 0, sinRespuesta: 3 });
+  assert.equal(log.lines.filter((l) => l.startsWith('error:Conciliación')).length, 1);
+  assert.match(log.lines[0], /las 3 compra\(s\) restantes se reintentan en el próximo barrido/);
+});
+
+test('conciliación: lo resuelto antes del fallo se conserva y solo las no consultadas quedan sin respuesta', async () => {
+  const vencidas = [{ _id: 'c1' }, { _id: 'c2' }, { _id: 'c3' }, { _id: 'c4' }];
+  const Compra = { find: () => consulta(vencidas) };
+  const consultadas = [];
+  const consultar = async (id) => {
+    consultadas.push(id);
+    if (id === 'c1') return { estado: 'pendiente', referenciaExterna: 'PAY-1' }; // la pasarela todavía lo procesa
+    throw new Error('conexión rechazada');
+  };
+
+  const resumen = await barrido.conciliarPagosVencidos({ Compra, consultar, log: sinLog(), ahora: AHORA });
+  assert.deepEqual(consultadas, ['c1', 'c2']);
+  assert.deepEqual([resumen.pendientes, resumen.sinRespuesta], [1, 3], 'c2 falló y c3 y c4 no se consultaron');
+});
+
+test('conciliación: con la pasarela sana consulta todas las compras vencidas', async () => {
+  const vencidas = [{ _id: 'c1' }, { _id: 'c2' }, { _id: 'c3' }];
+  const consultadas = [];
+  const consultar = async (id) => { consultadas.push(id); return { estado: 'pendiente', referenciaExterna: `PAY-${id}` }; };
+  const resumen = await barrido.conciliarPagosVencidos({ Compra: { find: () => consulta(vencidas) }, consultar, log: sinLog(), ahora: AHORA });
+  assert.deepEqual(consultadas, ['c1', 'c2', 'c3']);
+  assert.deepEqual([resumen.pendientes, resumen.sinRespuesta], [3, 0]);
+});
+
+test('un fallo de la pasarela en la conciliación no impide a los otros pasos de la pasada', async () => {
+  const modelos = modelosVacios();
+  modelos.Compra.find = () => consulta([{ _id: 'c1' }]);
+  const log = sinLog();
+  const { pasada } = barrido.crearBarrido({ ...modelos, consultar: async () => { throw new Error('timeout'); }, ahora: AHORA, log });
+  const resultados = await pasada();
+  assert.equal(resultados.pagos.sinRespuesta, 1);
+  assert.equal(resultados.eventosFinalizados, 0, 'el paso siguiente corrió');
+  assert.equal(modelos.llamadas.eventosUpdateMany, 1);
+  assert.equal(modelos.llamadas.aggregate, 1, 'y también la reconciliación de cupo, que es el último');
+});

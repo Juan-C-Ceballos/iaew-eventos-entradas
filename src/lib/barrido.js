@@ -32,20 +32,24 @@ async function expirarReservasVencidas({ Compra = CompraModel, ahora = new Date(
 // 2. Pagos pendientes cuyo plazo venció: se le pregunta a la pasarela, que es la única fuente de
 // verdad, y se resuelve la compra por el mismo camino que el webhook.
 //   aprobado → pagada | rechazado → rechazada | no la conoce → expirada | pendiente o sin respuesta → se deja.
+// Si la pasarela no responde, el paso se corta en la primera compra: las consultas son en serie y cada
+// una puede esperar hasta el timeout (5 s), así que seguir con las otras 49 demoraría la pasada minutos
+// sin aportar nada y retrasaría los pasos que vienen después (cascadas, reconciliación de cupo). No hace
+// falta recordar nada entre pasadas: la siguiente, un minuto después, vuelve a intentarlo (ADR 0013).
 async function conciliarPagosVencidos({ Compra = CompraModel, ahora = new Date(), limite = 50, consultar = consultarPago, log = comoConsola(), ...dependencias } = {}) {
   const vencidos = await Compra.find({ estado: 'pago_pendiente', pagoExpiraEn: { $lte: ahora } })
     .sort({ pagoExpiraEn: 1 }).limit(limite).select('_id').lean();
   const resumen = { pagadas: 0, rechazadas: 0, expiradas: 0, pendientes: 0, sinRespuesta: 0 };
   const deps = { Compra, ahora, ...dependencias };
 
-  for (const { _id } of vencidos) {
+  for (const [indice, { _id }] of vencidos.entries()) {
     let pago;
     try {
       pago = await consultar(_id);
     } catch (error) {
-      resumen.sinRespuesta += 1;
-      log.error(`Conciliación: sin respuesta de la pasarela para la compra ${_id}, se reintenta en el próximo barrido: ${error.message}`);
-      continue;
+      resumen.sinRespuesta = vencidos.length - indice; // la que falló y las que quedaron sin consultar
+      log.error(`Conciliación: sin respuesta de la pasarela (${error.message}); se corta el paso y las ${resumen.sinRespuesta} compra(s) restantes se reintentan en el próximo barrido`, { compraId: String(_id) });
+      break;
     }
 
     if (pago === null) {
