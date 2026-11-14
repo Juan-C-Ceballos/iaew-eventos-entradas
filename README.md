@@ -4,6 +4,8 @@ Trabajo Práctico Integrador de la cátedra **Integración de Aplicaciones en En
 
 > **Estado: Entrega 2 (implementación y defensa) — 16/11/2026.** Todo lo diseñado en la Entrega 1 está implementado y probado: las 18 operaciones del contrato, el flujo de compra multi-paso con webhook de pago, la emisión asincrónica de entradas con RabbitMQ, el barrido del worker, la observabilidad (logs JSON y dashboard) y las pruebas (suite automatizada, colección de Postman y prueba de carga). Para recorrerlo en la defensa: [docs/demo.md](docs/demo.md).
 
+Repositorio: https://github.com/Juan-C-Ceballos/iaew-eventos-entradas
+
 Consigna: https://utn-frc-iaew.github.io/iaew-2026-ecommerce-api/tpi/index.html
 
 ## 1. Proyecto, dominio e integrantes
@@ -61,7 +63,7 @@ flowchart LR
 | [docs/modelo-datos.md](docs/modelo-datos.md) | Colecciones, índices, máquinas de estado, migraciones y seed |
 | [docs/eventos/](docs/eventos/README.md) | Contrato de `entrada.comprada` y topología de RabbitMQ |
 | [docs/adr/](docs/adr/README.md) | Decisiones de arquitectura |
-| [docs/demo.md](docs/demo.md) | Guion de la demo de 15 minutos |
+| [docs/demo.md](docs/demo.md) | Guion de la demo: 7 minutos de recorrido y 5 de preguntas |
 | [carga/README.md](carga/README.md) | Prueba de carga: escenario, resultados y lo observado |
 
 ## 4. Requisitos previos
@@ -371,6 +373,8 @@ Stack: **Node.js 22 + Express 4 (CommonJS), MongoDB 7 + Mongoose 8, RabbitMQ 4.2
 - Trazas distribuidas (OpenTelemetry → Jaeger) reutilizando el `correlationId`.
 
 ## 19. Versión de esta entrega
+
+Repositorio: https://github.com/Juan-C-Ceballos/iaew-eventos-entradas
 
 | Entrega | Tag | Commit |
 |---|---|---|

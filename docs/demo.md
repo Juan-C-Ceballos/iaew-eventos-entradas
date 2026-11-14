@@ -1,6 +1,6 @@
-# Guion de la demo (15 minutos)
+# Guion de la demo (12 minutos: 7 de demo y 5 de preguntas)
 
-La demo tiene que mostrar el caso visible de la integración (el webhook de pago) y el efecto del flujo asincrónico (las entradas que aparecen). Los tiempos son una guía; lo que no puede faltar es el paso 3.
+La demo tiene que mostrar el caso visible de la integración (el webhook de pago) y el efecto del flujo asincrónico (las entradas que aparecen). Los tiempos de los pasos 1 a 6 suman los 7 minutos de demo que asigna la tarea de la UV, y el paso 7 es el material para los 5 de preguntas. Son una guía; lo que no puede faltar es el paso 3.
 
 ## Antes de empezar
 
@@ -30,11 +30,11 @@ campo() { node -pe "JSON.parse(require('fs').readFileSync(0))$1"; }   # campo '.
 
 Si Auth0 no responde, el [emisor local](../README.md#7-obtener-un-token-client_credentials) entrega tokens con los mismos scopes: `docker compose -f docker-compose.yml -f docker-compose.pruebas.yml up -d` y `token()` apuntando a `http://localhost:4010/oauth/token`.
 
-## 1. Arquitectura (1 min)
+## 1. Arquitectura (30 s)
 
 [C4 de contenedores](c4-container.md) y `docker compose ps`: `api`, `worker`, `mongodb`, `rabbitmq`, `pagos-mock`, `prometheus` y `grafana`. Decir qué es cada uno y que los nombres coinciden con el diagrama.
 
-## 2. Seguridad (2 min)
+## 2. Seguridad (1 min)
 
 ```bash
 curl -s $API/token-info -H "Authorization: Bearer $T_CANAL"            # iss, aud, scopes y vigencia
@@ -46,7 +46,7 @@ curl -s $API/internal/reportes/ventas -H "x-api-key: $INTERNAL_API_KEY" # 200: l
 
 Mensaje: JWT con firma, issuer, audience, expiración y scope por endpoint; la `x-api-key` no reemplaza a OAuth.
 
-## 3. La compra de punta a punta y el efecto asincrónico (4 min)
+## 3. La compra de punta a punta y el efecto asincrónico (3 min)
 
 ```bash
 # Reservar 2 entradas (cupo atómico). La misma clave siempre devuelve la misma compra.
@@ -74,7 +74,7 @@ Mostrar mientras tanto:
 
 Guardar `COMPRA` y el código de una entrada (`CODIGO=$(curl -s $API/compras/$COMPRA/entradas -H "Authorization: Bearer $T_CANAL" | campo '[0].codigo')`) para el paso 5.
 
-## 4. Errores del dominio (2 min)
+## 4. Errores del dominio (45 s)
 
 ```bash
 # Evento agotado: el Jazz tiene 2 lugares
@@ -90,7 +90,7 @@ curl -s -X POST $API/compras -H "Authorization: Bearer $T_CANAL" -H 'content-typ
 
 Pago rechazado: repetir el paso 3 con otra `Idempotency-Key` y `{"escenario":"rechazado"}`. La compra queda `rechazada` y `GET /eventos/$EVENTO` muestra que el cupo se devolvió. Todos los errores tienen el formato `{ error, code, retryable, action }`.
 
-## 5. Control de acceso (2 min)
+## 5. Control de acceso (45 s)
 
 ```bash
 curl -s -X POST $API/entradas/$CODIGO/validar -H "Authorization: Bearer $T_PUERTA" -H 'content-type: application/json' -d "{\"eventoId\":\"$EVENTO\"}"   # acceso_permitido
@@ -100,7 +100,7 @@ curl -s -X POST $API/entradas/$CODIGO/validar -H "Authorization: Bearer $T_PUERT
 
 La validación es una transición atómica: dos puertas a la vez no dejan entrar la misma entrada dos veces (hay una prueba con 20 puertas simultáneas).
 
-## 6. Observabilidad (2 min)
+## 6. Observabilidad y pruebas (1 min)
 
 En [Grafana](http://localhost:3001), con el dashboard *Eventos y Entradas*, mientras se corre `npm run postman` en otra terminal con el stack del emisor local, o un tramo corto de `npm run carga`:
 
@@ -110,9 +110,9 @@ En [Grafana](http://localhost:3001), con el dashboard *Eventos y Entradas*, mien
 
 Resultado de la prueba de carga adjunta ([carga/README.md](../carga/README.md)): 6395 solicitudes, 0 errores, p95 total de 437 ms, y 450 pagos igual a 450 entradas emitidas, sin sobreventa.
 
-## 7. Margen y preguntas (2 min)
+## 7. Preguntas técnicas (5 min)
 
-Cualquiera de estas sirve si sobra tiempo o preguntan por la resiliencia:
+Cualquiera de estas sirve si sobra tiempo en la demo o si preguntan por la resiliencia:
 
 - **Webhook perdido y conciliación:** `WEBHOOK_HABILITADO=false PAGO_TIMEOUT_MINUTOS=1 BARRIDO_INTERVALO_MS=5000 docker compose up -d`, pagar y esperar un minuto: el barrido consulta a la pasarela y la compra pasa a `pagada` ([ADR 0010](adr/adr-0010-ciclo-de-vida-compra-pago-conciliacion.md)). Volver a levantar sin esas variables.
 - **Webhook inválido:** el paso `POST /webhooks/pagos` con una firma incorrecta responde 401, y repetido sobre una compra pagada responde 200 con `duplicado: true`. Está en la colección de Postman (carpeta 04).
