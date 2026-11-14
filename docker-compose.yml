@@ -4,9 +4,10 @@ name: iaew-eventos-entradas
 # Las variables se leen del .env del proyecto (si existe) con valores por defecto
 # locales; dentro de la red de Compose los hosts son los nombres de servicio.
 
-# api, worker y db-init comparten la misma imagen (cambia solo el comando).
+# api, worker y db-init comparten la misma imagen (cambia solo el comando). La construye api
+# y las demas reutilizan el tag: si varios servicios declararan build sobre el mismo tag,
+# Compose los compila en paralelo y la escritura simultanea de la imagen falla.
 x-app-image: &app-image
-  build: .
   image: iaew-eventos-entradas:local
 
 services:
@@ -49,6 +50,7 @@ services:
 
   api:
     <<: *app-image
+    build: .
     command: ["node", "src/app.js"]
     restart: unless-stopped
     ports:

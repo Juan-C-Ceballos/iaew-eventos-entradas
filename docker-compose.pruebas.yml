@@ -6,7 +6,7 @@
 # No se usa para la demo ni para desplegar: ahí la API valida los tokens que emite Auth0.
 services:
   emisor-local:
-    build: .
+    # Reutiliza la imagen que construye api (ver el comentario de x-app-image en docker-compose.yml).
     image: iaew-eventos-entradas:local
     command: ["node", "scripts/emisor-local.js"]
     restart: unless-stopped
