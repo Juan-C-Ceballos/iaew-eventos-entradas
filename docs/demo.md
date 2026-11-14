@@ -1,6 +1,10 @@
-# Guion de la demo (12 minutos: 7 de demo y 5 de preguntas)
+# Guion de la demo (5 minutos de recorrido y 5 de preguntas)
 
-La demo tiene que mostrar el caso visible de la integración (el webhook de pago) y el efecto del flujo asincrónico (las entradas que aparecen). Los tiempos de los pasos 1 a 6 suman los 7 minutos de demo que asigna la tarea de la UV, y el paso 7 es el material para los 5 de preguntas. Son una guía; lo que no puede faltar es el paso 3.
+La demo tiene que mostrar el caso visible de la integración (el webhook de pago) y el efecto del flujo asincrónico (las entradas que aparecen).
+
+La tarea de la UV da **12 minutos: 7 de demo y 5 de preguntas**. Los pasos 1 a 6 están cronometrados en **5 minutos**, no en 7: los 2 de diferencia son el colchón para que un comando que tarda, una pregunta en el medio o un error que hay que repetir no coman el final. El paso 7 es el material de las preguntas.
+
+**Si se va de tiempo**, el orden para recortar es: primero el paso 4 (queda solo el evento agotado), después el 1 (se nombra la arquitectura sin abrir el diagrama) y después el 5. **El paso 3 no se toca**: es el único que muestra a la vez el flujo multi-paso, el webhook y el efecto asincrónico.
 
 ## Antes de empezar
 
@@ -34,7 +38,7 @@ Si Auth0 no responde, el [emisor local](../README.md#7-obtener-un-token-client_c
 
 [C4 de contenedores](c4-container.md) y `docker compose ps`: `api`, `worker`, `mongodb`, `rabbitmq`, `pagos-mock`, `prometheus` y `grafana`. Decir qué es cada uno y que los nombres coinciden con el diagrama.
 
-## 2. Seguridad (1 min)
+## 2. Seguridad (45 s)
 
 ```bash
 curl -s $API/token-info -H "Authorization: Bearer $T_CANAL"            # iss, aud, scopes y vigencia
@@ -46,7 +50,7 @@ curl -s $API/internal/reportes/ventas -H "x-api-key: $INTERNAL_API_KEY" # 200: l
 
 Mensaje: JWT con firma, issuer, audience, expiración y scope por endpoint; la `x-api-key` no reemplaza a OAuth.
 
-## 3. La compra de punta a punta y el efecto asincrónico (3 min)
+## 3. La compra de punta a punta y el efecto asincrónico (2 min)
 
 ```bash
 # Reservar 2 entradas (cupo atómico). La misma clave siempre devuelve la misma compra.
@@ -74,7 +78,7 @@ Mostrar mientras tanto:
 
 Guardar `COMPRA` y el código de una entrada (`CODIGO=$(curl -s $API/compras/$COMPRA/entradas -H "Authorization: Bearer $T_CANAL" | campo '[0].codigo')`) para el paso 5.
 
-## 4. Errores del dominio (45 s)
+## 4. Errores del dominio (30 s)
 
 ```bash
 # Evento agotado: el Jazz tiene 2 lugares
@@ -90,7 +94,7 @@ curl -s -X POST $API/compras -H "Authorization: Bearer $T_CANAL" -H 'content-typ
 
 Pago rechazado: repetir el paso 3 con otra `Idempotency-Key` y `{"escenario":"rechazado"}`. La compra queda `rechazada` y `GET /eventos/$EVENTO` muestra que el cupo se devolvió. Todos los errores tienen el formato `{ error, code, retryable, action }`.
 
-## 5. Control de acceso (45 s)
+## 5. Control de acceso (30 s)
 
 ```bash
 curl -s -X POST $API/entradas/$CODIGO/validar -H "Authorization: Bearer $T_PUERTA" -H 'content-type: application/json' -d "{\"eventoId\":\"$EVENTO\"}"   # acceso_permitido
@@ -100,7 +104,7 @@ curl -s -X POST $API/entradas/$CODIGO/validar -H "Authorization: Bearer $T_PUERT
 
 La validación es una transición atómica: dos puertas a la vez no dejan entrar la misma entrada dos veces (hay una prueba con 20 puertas simultáneas).
 
-## 6. Observabilidad y pruebas (1 min)
+## 6. Observabilidad y pruebas (45 s)
 
 En [Grafana](http://localhost:3001), con el dashboard *Eventos y Entradas*, mientras se corre `npm run postman` en otra terminal con el stack del emisor local, o un tramo corto de `npm run carga`:
 

@@ -63,7 +63,7 @@ flowchart LR
 | [docs/modelo-datos.md](docs/modelo-datos.md) | Colecciones, índices, máquinas de estado, migraciones y seed |
 | [docs/eventos/](docs/eventos/README.md) | Contrato de `entrada.comprada` y topología de RabbitMQ |
 | [docs/adr/](docs/adr/README.md) | Decisiones de arquitectura |
-| [docs/demo.md](docs/demo.md) | Guion de la demo: 7 minutos de recorrido y 5 de preguntas |
+| [docs/demo.md](docs/demo.md) | Guion de la demo: 5 minutos de recorrido, 5 de preguntas y qué recortar si se va de tiempo |
 | [carga/README.md](carga/README.md) | Prueba de carga: escenario, resultados y lo observado |
 
 ## 4. Requisitos previos
