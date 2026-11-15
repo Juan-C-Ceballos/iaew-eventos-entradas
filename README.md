@@ -379,7 +379,7 @@ Repositorio: https://github.com/Juan-C-Ceballos/iaew-eventos-entradas
 | Entrega | Tag | Commit |
 |---|---|---|
 | Entrega 1 — Diseño y esqueleto | `v1.0.0` | `9836280` |
-| Entrega 2 — Implementación y defensa | `v2.0.0` | `9d812f0` |
+| Entrega 2 — Implementación y defensa | `v2.0.0` | `e2a81f0` |
 
 El hash documentado corresponde al último commit de contenido de la entrega; el tag apunta al commit siguiente, que solo registra ese hash acá. El `.zip` subido a UV se genera desde el tag: `git archive --format=zip -o iaew-eventos-entradas-v2.0.0.zip v2.0.0`.
 
