@@ -30,7 +30,7 @@ Un organizador publica eventos con capacidad limitada. Un canal de venta compra 
 | Endpoint con `x-api-key` | `GET /internal/reportes/ventas` |
 | Productor → broker → consumidor | `api` publica `entrada.comprada` en RabbitMQ (patrón outbox) y `worker` emite las entradas |
 | Integración adicional | **Webhook de pago** firmado con HMAC-SHA256 (`POST /webhooks/pagos`) |
-| Errores del dominio | `EVENT_SOLD_OUT`, `PAYMENT_REJECTED` (compra `rechazada`), `TICKET_ALREADY_USED`, `IDEMPOTENCY_KEY_MISMATCH` |
+| Errores del dominio | `EVENT_SOLD_OUT`, `TICKET_ALREADY_USED` e `IDEMPOTENCY_KEY_MISMATCH` (409); el pago rechazado no es un error HTTP: la compra queda `rechazada` y se libera el cupo |
 | Logs JSON y dashboard | Logs de pino con correlation id; Prometheus + Grafana con p95, throughput y error rate |
 | Postman y prueba de carga | Colección ejecutable con Newman (72 peticiones) y plan de JMeter con su reporte |
 | Resiliencia | Idempotencia, outbox, retry con espera y DLQ, timeouts, conciliación y reconciliación del cupo: mapa falla → patrón → prueba en el [ADR 0013](docs/adr/adr-0013-patrones-de-resiliencia.md) |

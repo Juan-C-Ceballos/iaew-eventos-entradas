@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "IAEW Eventos y Entradas API",
-    "version": "1.0.0",
-    "description": "Contrato de la API del TPI IAEW 2026 (dominio Eventos y Entradas): CRUD de eventos y compras, flujo multi-paso de compra (reserva de cupo → pago simulado notificado por webhook → emisión diferida de entradas vía RabbitMQ) y validación de ingreso.\n\nConvenciones (ver docs/adr):\n- Rutas sin prefijo de versión; la versión del contrato es `info.version` (ADR 0001).\n- Errores con el formato `Error` `{ error, code, retryable, action, details? }` (ADR 0001).\n- OAuth 2.0 `client_credentials` con Auth0; 401 = token ausente/inválido, 403 = falta el scope (ADR 0004).\n- `Idempotency-Key` obligatorio en operaciones con efectos de negocio (ADR 0007).\n- Header opcional `X-Correlation-Id` en todas las operaciones; se devuelve en la respuesta y se propaga a logs y eventos (ADR 0008, propuesta).",
+    "version": "2.0.0",
+    "description": "Contrato de la API del TPI IAEW 2026 (dominio Eventos y Entradas): CRUD de eventos y compras, flujo multi-paso de compra (reserva de cupo → pago simulado notificado por webhook → emisión diferida de entradas vía RabbitMQ) y validación de ingreso.\n\nConvenciones (ver docs/adr):\n- Rutas sin prefijo de versión; la versión del contrato es `info.version` (ADR 0001).\n- Errores con el formato `Error` `{ error, code, retryable, action, details? }` (ADR 0001).\n- OAuth 2.0 `client_credentials` con Auth0; 401 = token ausente/inválido, 403 = falta el scope (ADR 0004).\n- `Idempotency-Key` obligatorio en operaciones con efectos de negocio (ADR 0007).\n- Header opcional `X-Correlation-Id` en todas las operaciones; se devuelve en la respuesta y se propaga a logs y eventos (ADR 0008).",
     "contact": { "name": "Equipo TPI Eventos y Entradas — UTN FRC" },
     "license": { "name": "ISC", "identifier": "ISC" }
   },

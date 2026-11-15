@@ -26,4 +26,4 @@ Quienes consumen la API son clientes M2M heterogéneos, Postman, Swagger UI y un
 
 - **gRPC para la API pública:** no hay soporte nativo en navegadores (necesita gRPC-Web y un proxy), las herramientas de prueba que usamos (Postman/JMeter) están pensadas para HTTP/JSON y no cumpliría el requisito de OpenAPI 3.1.
 - **gRPC como integración adicional (validador de entradas):** agrega un contenedor, un `.proto`, generación de stubs y otro esquema de seguridad. El webhook de pago encaja mejor en el flujo multi-paso y en el error "pago rechazado" que pide el dominio.
-- **GraphQL/BFF:** es un optativo con bonus. Queda fuera del alcance de la Entrega 1.
+- **GraphQL/BFF:** es un optativo con bonus. Queda fuera del alcance de este TPI.
