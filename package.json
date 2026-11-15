@@ -1,6 +1,6 @@
 {
   "name": "iaew-eventos-entradas",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "description": "Trabajo Práctico Integrador de la cátedra Integración de Aplicaciones en Entornos Web (UTN FRC, 2026) — dominio Eventos y Entradas.",
   "main": "src/app.js",
@@ -13,21 +13,29 @@
     "migrate:down": "migrate-mongo down",
     "seed": "node scripts/seed.js",
     "test": "node --test",
-    "check": "node --check src/app.js && node --check src/worker.js && node --check scripts/seed.js && node --check services/pagos-mock/server.js",
-    "lint:openapi": "npx --yes @redocly/cli@1 lint docs/openapi.json"
+    "check": "node --check src/app.js && node --check src/worker.js && node --check scripts/seed.js && node --check scripts/emisor-local.js && node --check services/pagos-mock/server.js && node --check postman/generar-coleccion.js && node --check carga/generar-plan.js && node --check carga/ejecutar.js",
+    "lint:openapi": "npx --yes @redocly/cli@1 lint docs/openapi.json",
+    "postman": "newman run postman/iaew-eventos-entradas.postman_collection.json -e postman/pruebas.postman_environment.json",
+    "postman:generar": "node postman/generar-coleccion.js",
+    "carga": "node carga/ejecutar.js",
+    "carga:generar": "node carga/generar-plan.js",
+    "pagos-mock": "node services/pagos-mock/server.js"
   },
   "dependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
     "amqplib": "2.0.1",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "express-oauth2-jwt-bearer": "1.10.0",
     "migrate-mongo": "^14.0.7",
     "mongoose": "^8.9.5",
+    "pino": "^10.4.0",
+    "prom-client": "^15.1.3",
     "swagger-ui-express": "^5.0.1"
   },
   "devDependencies": {
-    "ajv": "^8.17.1",
-    "ajv-formats": "^3.0.1",
+    "newman": "^6.2.3",
     "nodemon": "^3.1.9"
   },
   "engines": {

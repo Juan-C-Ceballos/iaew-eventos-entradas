@@ -502,7 +502,8 @@
               "capacidad": { "type": "integer", "minimum": 1 },
               "cupoDisponible": { "type": "integer", "minimum": 0, "readOnly": true },
               "precio": { "type": "number", "minimum": 0 },
-              "estado": { "$ref": "#/components/schemas/EstadoEvento" }
+              "estado": { "$ref": "#/components/schemas/EstadoEvento" },
+              "cancelacionProcesadaEn": { "type": "string", "format": "date-time", "readOnly": true, "description": "Vacío hasta que termina la cascada de una cancelación sobre compras y entradas (ADR 0011)." }
             }
           },
           { "$ref": "#/components/schemas/Timestamps" }

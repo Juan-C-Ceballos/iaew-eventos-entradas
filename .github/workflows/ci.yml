@@ -1,0 +1,83 @@
+# Integración continua: pruebas (con MongoDB y RabbitMQ reales), contrato OpenAPI y la colección de Postman
+# corrida con Newman contra el stack completo de Docker Compose.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pruebas:
+    runs-on: ubuntu-latest
+    services:
+      mongodb:
+        image: mongo:7
+        ports: ["27017:27017"]
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand(\"ping\").ok'"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+      rabbitmq:
+        image: rabbitmq:4.2-management
+        env:
+          RABBITMQ_DEFAULT_USER: iaew
+          RABBITMQ_DEFAULT_PASS: iaew-local
+        ports: ["5672:5672"]
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      # Las pruebas de integración usan una base propia por archivo (<nombre>_<sufijo>) y vacían sus colecciones.
+      MONGODB_URI_TEST: mongodb://127.0.0.1:27017/iaew_eventos_test
+      RABBIT_URL_TEST: amqp://iaew:iaew-local@127.0.0.1:5672
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Sintaxis de los puntos de entrada
+        run: npm run check
+      - name: Pruebas (unitarias, de API y de integración con MongoDB y RabbitMQ)
+        run: npm test
+      - name: Lint del contrato OpenAPI
+        run: npm run lint:openapi
+      - name: Los archivos de Compose son válidos
+        run: |
+          docker compose config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.pruebas.yml config --quiet
+
+  coleccion-postman:
+    runs-on: ubuntu-latest
+    needs: pruebas
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Levantar el stack con el emisor OAuth local
+        run: docker compose -f docker-compose.yml -f docker-compose.pruebas.yml up -d --build
+      - name: Esperar a la API
+        run: |
+          for i in $(seq 1 60); do
+            curl -fsS http://localhost:3000/health && exit 0
+            sleep 2
+          done
+          docker compose -f docker-compose.yml -f docker-compose.pruebas.yml logs
+          exit 1
+      - name: Colección de Postman con Newman
+        run: npx newman run postman/iaew-eventos-entradas.postman_collection.json -e postman/pruebas.postman_environment.json --reporters cli,junit --reporter-junit-export newman-resultados.xml
+      - name: Resultados de Newman
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: newman-resultados
+          path: newman-resultados.xml
+      - name: Logs del stack si algo falló
+        if: failure()
+        run: docker compose -f docker-compose.yml -f docker-compose.pruebas.yml logs --no-color
+      - name: Bajar el stack
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.pruebas.yml down -v

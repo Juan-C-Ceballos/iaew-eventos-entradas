@@ -1,5 +1,6 @@
 const Compra = require('../models/Compra');
 const { publishEntradaComprada } = require('./rabbit');
+const { comoConsola } = require('./logger');
 
 // Patrón outbox (ADR 0009): el webhook persiste `estado: pagada` y `emisionEvento` en una
 // sola escritura; este relay publica los eventos pendientes y los marca como publicados.
@@ -32,7 +33,7 @@ async function publicarPendientes({ repositorio = repositorioMongo, publish = pu
 // Una pasada del relay. Un fallo se registra una sola vez y no en cada pasada (con RabbitMQ
 // caído serían miles de líneas iguales): se vuelve a registrar solo si el error cambia, y se
 // avisa cuando la pasada vuelve a completarse sin errores.
-function crearPasada({ log = console, ...opciones } = {}) {
+function crearPasada({ log = comoConsola(), ...opciones } = {}) {
   let ultimoError = null;
   let enCurso = false;
   return async function pasada() {
