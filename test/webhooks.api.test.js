@@ -14,6 +14,7 @@ before(async () => {
   secretoPrevio = process.env.WEBHOOK_SECRET;
   process.env.WEBHOOK_SECRET = SECRETO;
   process.env.AUTH0_DOMAIN ||= 'tenant-de-prueba.us.auth0.com';
+  process.env.AUTH0_AUDIENCE ||= 'https://iaew-eventos-api';
   // Sin conexión, las operaciones de Mongoose esperan 10 s antes de fallar: se acorta para probar el 503.
   mongoose.set('bufferTimeoutMS', 200);
   const app = require('../src/app');

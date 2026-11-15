@@ -10,6 +10,7 @@ let base;
 
 before(async () => {
   process.env.AUTH0_DOMAIN ||= 'tenant-de-prueba.us.auth0.com';
+  process.env.AUTH0_AUDIENCE ||= 'https://iaew-eventos-api';
   process.env.INTERNAL_API_KEY = 'clave-de-prueba';
   process.env.WEBHOOK_SECRET = 'secreto-de-prueba';
   const app = require('../src/app');
