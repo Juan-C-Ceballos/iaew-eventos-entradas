@@ -2,7 +2,7 @@
 
 Trabajo Práctico Integrador de la cátedra **Integración de Aplicaciones en Entornos Web** (UTN FRC, 2026).
 
-> **Estado: Entrega 2 (implementación y defensa) — 16/11/2026.** Todo lo diseñado en la Entrega 1 está implementado y probado: las 18 operaciones del contrato, el flujo de compra multi-paso con webhook de pago, la emisión asincrónica de entradas con RabbitMQ, el barrido del worker, la observabilidad (logs JSON y dashboard) y las pruebas (suite automatizada, colección de Postman y prueba de carga). Para recorrerlo en la defensa: [docs/demo.md](docs/demo.md).
+> **Estado: Entrega 2 (implementación y defensa) — 16/11/2026.** Todo lo diseñado en la Entrega 1 está implementado y probado: las 18 operaciones del contrato, el flujo de compra multi-paso con webhook de pago, la emisión asincrónica de entradas con RabbitMQ, el barrido del worker, la observabilidad (logs JSON y dashboard) y las pruebas (suite automatizada, colección de Postman y prueba de carga).
 
 Repositorio: https://github.com/Juan-C-Ceballos/iaew-eventos-entradas
 
@@ -63,7 +63,6 @@ flowchart LR
 | [docs/modelo-datos.md](docs/modelo-datos.md) | Colecciones, índices, máquinas de estado, migraciones y seed |
 | [docs/eventos/](docs/eventos/README.md) | Contrato de `entrada.comprada` y topología de RabbitMQ |
 | [docs/adr/](docs/adr/README.md) | Decisiones de arquitectura |
-| [docs/demo.md](docs/demo.md) | Guion de la demo: 5 minutos de recorrido, 5 de preguntas y qué recortar si se va de tiempo |
 | [carga/README.md](carga/README.md) | Prueba de carga: escenario, resultados y lo observado |
 
 ## 4. Requisitos previos
@@ -379,7 +378,7 @@ Repositorio: https://github.com/Juan-C-Ceballos/iaew-eventos-entradas
 | Entrega | Tag | Commit |
 |---|---|---|
 | Entrega 1 — Diseño y esqueleto | `v1.0.0` | `9836280` |
-| Entrega 2 — Implementación y defensa | `v2.0.0` | `e2a81f0` |
+| Entrega 2 — Implementación y defensa | `v2.0.0` | `c99d4a9` |
 
 El hash documentado corresponde al último commit de contenido de la entrega; el tag apunta al commit siguiente, que solo registra ese hash acá. El `.zip` subido a UV se genera desde el tag: `git archive --format=zip -o iaew-eventos-entradas-v2.0.0.zip v2.0.0`.
 
@@ -406,7 +405,7 @@ src/
   models/                  Evento, Asistente, Compra, Entrada, EventoProcesado
 services/pagos-mock/       pasarela de pago simulada (Dockerfile propio, sin dependencias)
 observabilidad/            configuración de Prometheus y Grafana (datasource y dashboard)
-docs/                      C4, ADRs, OpenAPI, modelo de datos, eventos, guion de la demo
+docs/                      C4, ADRs, OpenAPI, modelo de datos, eventos
 test/                      node --test (unitarias, API, integración con MongoDB y RabbitMQ)
 postman/                   colección, ambientes y su generador
 carga/                     plan de JMeter, runner, reporte y resumen de la prueba de carga
